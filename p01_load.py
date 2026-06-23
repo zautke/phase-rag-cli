@@ -44,15 +44,25 @@ def main(
             targets = [source_dir]
         else:
             targets = sorted([p for p in source_dir.glob("*.*") if p.is_file()])
+        stem_counts: dict[str, int] = {}
+        for p in targets:
+            stem_counts[p.stem] = stem_counts.get(p.stem, 0) + 1
+
         for p in targets:
             mime = "text/plain"
             if p.suffix in (".md", ".markdown"):
                 mime = "text/markdown"
             elif p.suffix in (".html", ".htm"):
                 mime = "text/html"
+            # Disambiguate documents sharing identical stems across different formats
+            doc_id = (
+                f"{p.stem}_{p.suffix.lstrip('.')}"
+                if stem_counts[p.stem] > 1
+                else p.stem
+            )
             docs.append(
                 RawDocument(
-                    doc_id=p.stem,
+                    doc_id=doc_id,
                     source_uri=str(p.resolve()),
                     mime_type=mime,
                     raw_content=p.read_text(encoding="utf-8", errors="ignore"),
