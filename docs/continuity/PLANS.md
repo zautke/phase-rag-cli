@@ -26,9 +26,16 @@ Deliver a production-grade, 10-phase UNIX-piped Hybrid RAG CLI toolsuite with an
 - **Verification & Releases:**
   - 17 unit and integration tests passing in `tests/`.
   - Automated smoke test suites in `verify_pipeline.ps1` and `verify_pipeline.sh`.
-  - PR #1 (`feat/hybrid-rag-cli` -> `development`) merged.
-  - PR #2 (`development` -> `main`) merged.
-  - `main` branch initialized, merged, and configured as the default GitHub repository branch.
+  - PR #1 (`feat/hybrid-rag-cli` -> `development`) merged (`7aab409`).
+  - PR #2 (`development` -> `main`) merged (`7437c3a`).
+  - `main` branch initialized, merged, and configured as default GitHub branch (`origin/main`).
+- **Wave 7: Formal Architecture & Mathematical Blueprint (Complete):**
+  - Authored comprehensive 919-line reference: [`docs/architecture/phase_rag_pipeline_map.md`](file:///C:/Users/me/dev/phase-rag-cli/docs/architecture/phase_rag_pipeline_map.md).
+  - Dual review subagent audit: Math & Algorithmic Auditor (`7a043376`) + Systems & Pipeline Auditor (`b630bab9`).
+  - Formulated closed-form Lost-in-the-Middle permutation $\pi(r)$, guarded nDCG@k, SPLADE++ neural lexical expansion, exact chunk count $K = \lceil T/S \rceil$, and dual-template progressive query rewriting.
+  - Synchronized architectural note to `master-kb` (`basic-memory`) at `projects/phase-rag-cli/Phase RAG Pipeline Complete Architectural and Mathematical Map.md`.
+  - Codebase re-indexed in `jcodemunch` (138 symbols across 22 files).
+  - Pushed to `origin/main` at commit `14e36ef`.
 
 ### Non-Goals
 - External server daemon requirement for baseline CLI operations (embedded Qdrant engine operates out-of-the-box).
