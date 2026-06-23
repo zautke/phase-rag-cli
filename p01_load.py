@@ -40,12 +40,21 @@ def main(
 ) -> None:
     docs = []
     if source_dir and source_dir.exists():
-        for p in sorted(source_dir.glob("*.*")):
+        if source_dir.is_file():
+            targets = [source_dir]
+        else:
+            targets = sorted([p for p in source_dir.glob("*.*") if p.is_file()])
+        for p in targets:
+            mime = "text/plain"
+            if p.suffix in (".md", ".markdown"):
+                mime = "text/markdown"
+            elif p.suffix in (".html", ".htm"):
+                mime = "text/html"
             docs.append(
                 RawDocument(
                     doc_id=p.stem,
                     source_uri=str(p.resolve()),
-                    mime_type="text/markdown" if p.suffix == ".md" else "text/plain",
+                    mime_type=mime,
                     raw_content=p.read_text(encoding="utf-8", errors="ignore"),
                 )
             )
