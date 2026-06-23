@@ -35,6 +35,13 @@
   - [x] Create and publish branch `main` at root commit `bc1a027`.
   - [x] Open PR #2 (`development` -> `main`) and merge into `main` (`7437c3a`).
   - [x] Set `main` as the default branch on GitHub repository `zautke/phase-rag-cli`.
+- [x] **Wave 7: Formal Architecture Mapping & Knowledge Base Synchronization**
+  - [x] Author comprehensive 10-phase + P00 architectural and mathematical map (`docs/architecture/phase_rag_pipeline_map.md`).
+  - [x] Dispatch 2 specialized review subagents (`Math & Algorithmic Auditor` and `Systems & Pipeline Auditor`) to audit formulas, schemas, and execution mechanics.
+  - [x] Integrate closed-form LITM permutations, guarded nDCG@k, SPLADE++ formulations, chunk count formulas, and tri-query retrieval flows.
+  - [x] Synchronize definitive map to `master-kb` (`projects/phase-rag-cli/Phase RAG Pipeline Complete Architectural and Mathematical Map.md`) adhering to the `master-kb` singularity invariant.
+  - [x] Re-index repository symbols and AST graph using `jcodemunch`.
+  - [x] Update canonical continuity document set in `docs/continuity/`.
 
 ## Follow-up & Backlog Tasks
 

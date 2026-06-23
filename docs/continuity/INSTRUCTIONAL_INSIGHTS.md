@@ -36,3 +36,9 @@
 ### 4. CRAG Query Rewriting with Corpus Lexical Anchors
 - **Pattern:** When CRAG evaluates a query below `--crag-threshold`, blindly rewriting the query via standard LLM prompts often hallucinates or remains divergent from the actual indexed corpus.
 - **Solution:** In `p00_crag_orchestrator.py`, extract the highest-scoring candidate chunks from Phase 08, parse salient nouns and domain terms (anchors), and synthesize the rewritten query around those anchors. This guarantees deterministic convergence towards indexed documents within 1–2 loop iterations.
+
+### 5. Double-Validation on Payload Serialization
+- **Pattern:** Pydantic models mutated dynamically during runtime may bypass input boundary validation if properties are assigned directly without re-running validators.
+- **Solution:** `PhaseCLI.emit()` enforces double validation prior to serialization:
+  `self.output_model.model_validate(payload.model_dump())`
+  This guarantees that any invalid types, missing fields, or forbidden extra keys are caught before writing to disk or `stdout`.
