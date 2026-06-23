@@ -114,6 +114,79 @@ def test_lost_in_the_middle_and_query_rewriter_helpers() -> None:
     assert "Attempt 2 remained below threshold" in reason2
 
 
+def test_ndcg_and_answer_relevance_unit() -> None:
+    """Unit test new computed nDCG and answer relevance metrics in p10."""
+    xml_ideal = (
+        '<retrieved_context>\n'
+        '  <document id="d1" chunk_id="c1" rerank_score="0.9">\n    ctx\n  </document>\n'
+        '  <document id="d2" chunk_id="c2" rerank_score="0.5">\n    ctx\n  </document>\n'
+        '</retrieved_context>'
+    )
+    assert p10_evaluate.compute_ndcg_at_k(xml_ideal) == 1.0
+
+    xml_inverted = (
+        '<retrieved_context>\n'
+        '  <document id="d1" chunk_id="c1" rerank_score="0.2">\n    ctx\n  </document>\n'
+        '  <document id="d2" chunk_id="c2" rerank_score="0.8">\n    ctx\n  </document>\n'
+        '</retrieved_context>'
+    )
+    ndcg_inv = p10_evaluate.compute_ndcg_at_k(xml_inverted)
+    assert 0.0 < ndcg_inv < 1.0
+
+    assert p10_evaluate.compute_ndcg_at_k("<retrieved_context></retrieved_context>") == 0.0
+
+    q = "How does hybrid retrieval combine dense and sparse?"
+    ans_good = "Hybrid retrieval uses dense vectors and sparse indices to combine candidate sets."
+    relevance_good = p10_evaluate.compute_answer_relevance(q, ans_good)
+    assert relevance_good > 0.5
+
+    ans_poor = "Nothing related here."
+    relevance_poor = p10_evaluate.compute_answer_relevance(q, ans_poor)
+    assert relevance_poor == 0.0
+
+
+def test_p09_extractive_grounding_unit() -> None:
+    """Unit test p09 extractive grounding under GROUNDED, REWRITE_REQUIRED, and empty contexts."""
+    items = [
+        rc.RerankedContextItem(
+            chunk_id="chk_0",
+            doc_id="doc_0",
+            cross_encoder_score=0.88,
+            expanded_parent_context="### Section 1\nHybrid RAG fuses dense embeddings and SPLADE sparse vectors. Reciprocal rank fusion merges them cleanly.",
+        )
+    ]
+    ans_grounded, citations = p09_generate.extract_grounded_answer(
+        query="How does Hybrid RAG fuse dense and sparse vectors?",
+        top_contexts=items,
+        crag_threshold=0.70,
+        max_score=0.88,
+        verdict="GROUNDED",
+    )
+    assert "Verified grounded answer:" in ans_grounded
+    assert "[doc_0:chk_0]" in ans_grounded
+    assert citations == ["[doc_0:chk_0]"]
+
+    ans_rewrite, _ = p09_generate.extract_grounded_answer(
+        query="How does Hybrid RAG fuse dense and sparse vectors?",
+        top_contexts=items,
+        crag_threshold=0.95,
+        max_score=0.88,
+        verdict="REWRITE_REQUIRED",
+    )
+    assert "Insufficient retrieval grounding: maximum confidence score is 0.8800" in ans_rewrite
+    assert "below the required CRAG threshold of 0.9500" in ans_rewrite
+
+    ans_empty, cit_empty = p09_generate.extract_grounded_answer(
+        query="test query",
+        top_contexts=[],
+        crag_threshold=0.80,
+        max_score=0.0,
+        verdict="REWRITE_REQUIRED",
+    )
+    assert "No relevant context retrieved" in ans_empty
+    assert cit_empty == []
+
+
 def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     """
     Test p06_query.py, p08_rerank.py (with fastembed backend), p09_generate.py,
@@ -121,14 +194,17 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     """
     root = Path(__file__).resolve().parent.parent
     qdrant_dir = tmp_path / "qdrant"
-    f04 = tmp_path / "04_chunked.json"
-    f05 = tmp_path / "05_indexed.json"
-    f06 = tmp_path / "06_query_plan.json"
-    f07 = tmp_path / "07_retrieved.json"
-    f08 = tmp_path / "08_reranked.json"
-    f09 = tmp_path / "09_generated.json"
-    f10 = tmp_path / "10_evaluated.json"
-    f00 = tmp_path / "00_crag_loop_summary.json"
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    f04 = artifacts_dir / "04_chunked.json"
+    f05 = artifacts_dir / "05_indexed.json"
+    f06 = artifacts_dir / "06_query_plan.json"
+    f07 = artifacts_dir / "07_retrieved.json"
+    f08 = artifacts_dir / "08_reranked.json"
+    f09 = artifacts_dir / "09_generated.json"
+    f10 = artifacts_dir / "10_evaluated.json"
+    f00 = artifacts_dir / "00_crag_loop_summary.json"
 
     # Build Phase 04 input fixture
     p04_payload = rc.Phase04ChunkedOutput(
@@ -296,6 +372,7 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     assert out09.crag_verdict == "GROUNDED"
     assert len(out09.citations) == 2
     assert "Hybrid RAG" in out09.synthesized_answer
+    assert "Verified grounded answer:" in out09.synthesized_answer
 
     # 6. Run p10_evaluate.py
     proc10 = subprocess.run(
@@ -313,11 +390,16 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
         check=True,
     )
     out10 = rc.Phase10EvalOutput.model_validate_json(proc10.stdout)
-    assert out10.ndcg_at_k == 0.942
+    assert 0.0 <= out10.ndcg_at_k <= 1.0
     assert 0.0 <= out10.faithfulness_score <= 1.0
+    assert 0.0 <= out10.answer_relevance <= 1.0
     assert out10.final_answer == out09.synthesized_answer
 
     # 7. Run p00_crag_orchestrator.py with high threshold (0.9999) to exercise multi-attempt rewrite loop
+    # Test running from a non-repo CWD (tmp_path) and piping empty stdin (non-TTY)
+    external_dir = tmp_path / "somewhere_else"
+    external_dir.mkdir()
+
     proc00 = subprocess.run(
         [
             sys.executable,
@@ -340,7 +422,8 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
             "2",
             "-c",
         ],
-        cwd=str(root),
+        cwd=str(external_dir),
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -351,3 +434,16 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     assert len(out00.attempts_history) == 2
     assert out00.attempts_history[0].crag_verdict == "REWRITE_REQUIRED"
     assert out00.final_query != out00.initial_query
+
+    # Verify attempt artifacts exist under out_file.parent
+    assert (artifacts_dir / "crag_attempt_1" / "06_query_plan.json").exists()
+    assert (artifacts_dir / "crag_attempt_1" / "07_retrieved.json").exists()
+    assert (artifacts_dir / "crag_attempt_1" / "08_reranked.json").exists()
+    assert (artifacts_dir / "crag_attempt_1" / "09_generated.json").exists()
+    assert (artifacts_dir / "crag_attempt_2" / "06_query_plan.json").exists()
+    assert (artifacts_dir / "crag_attempt_2" / "07_retrieved.json").exists()
+    assert (artifacts_dir / "crag_attempt_2" / "08_reranked.json").exists()
+    assert (artifacts_dir / "crag_attempt_2" / "09_generated.json").exists()
+    assert (artifacts_dir / "09_generated.json").exists()
+    assert (artifacts_dir / "10_evaluated.json").exists()
+    assert f00.exists()

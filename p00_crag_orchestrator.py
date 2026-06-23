@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 
 from rag_contracts import (
@@ -38,7 +39,8 @@ def Usage() -> str:
         "[--qdrant-url / -u URL] [--qdrant-path / -p PATH] [--rerank-backend / -b BACKEND] "
         "[--rerank-model / -m MODEL] [--crag-threshold / -t FLOAT] [--max-retries / -r INT] "
         "[--quiet-children / -c] [--quiet / -s]\n"
-        "Orchestrates autonomous CRAG query-rewrite loops across Phases 06 -> 09 and final evaluation in Phase 10."
+        "Orchestrates autonomous CRAG query-rewrite loops across Phases 06 -> 09 and final evaluation in Phase 10.\n"
+        "Input precedence: (1) explicit --in-file if provided; (2) stdin if piped; (3) default artifacts/05_indexed.json."
     )
 
 
@@ -49,7 +51,14 @@ def invoke_cli_phase(
     Spawns an isolated CLI phase subprocess, pipes validated JSON to its stdin,
     allows child stderr telemetry to pass straight to the terminal, and captures stdout JSON.
     """
-    cmd = [sys.executable, script, *args]
+    script_dir = Path(__file__).resolve().parent
+    target_script = (
+        str(script_dir / script)
+        if not Path(script).is_absolute()
+        else script
+    )
+
+    cmd = [sys.executable, target_script, *args]
     if quiet_child:
         cmd.append("--quiet")
 
@@ -171,7 +180,7 @@ def main(
             "-i",
             help="Phase 05 Indexed output JSON (or pipe Phase 05 into stdin)",
         ),
-    ] = Path("artifacts/05_indexed.json"),
+    ] = None,
     out_file: Annotated[
         Path,
         typer.Option(
@@ -226,6 +235,7 @@ def main(
         typer.Option(
             "--max-retries",
             "-r",
+            min=1,
             help="Maximum CRAG loopback attempts before forcing synthesis",
         ),
     ] = 3,
@@ -246,10 +256,26 @@ def main(
         ),
     ] = False,
 ) -> None:
-    # 1. Validate upstream Phase 05 contract (either from --in-file or stdin pipe)
-    p05_indexed: Phase05IndexedOutput = cli_engine.load_upstream(
-        in_file if (in_file and in_file.exists() and sys.stdin.isatty()) else None
-    )
+    if max_retries < 1:
+        raise typer.BadParameter("--max-retries must be at least 1")
+
+    # 1. Input precedence: explicit --in-file, then piped stdin, then artifacts/05_indexed.json fallback
+    p05_indexed: Phase05IndexedOutput
+    if in_file is not None:
+        if not in_file.exists():
+            raise typer.BadParameter(f"Input file not found: {in_file}")
+        p05_indexed = cli_engine.load_upstream(in_file)
+    elif not sys.stdin.isatty():
+        p05_indexed = cli_engine.load_upstream(None)
+    else:
+        default_in = Path("artifacts/05_indexed.json")
+        if default_in.exists():
+            p05_indexed = cli_engine.load_upstream(default_in)
+        else:
+            raise typer.BadParameter(
+                "Expected upstream JSON via --in-file, stdin pipe, or default artifacts/05_indexed.json"
+            )
+
     p05_json = p05_indexed.model_dump_json()
 
     current_query = query
@@ -259,13 +285,15 @@ def main(
     p09_out: Phase09GenerationOutput | None = None
     converged = False
 
+    artifacts_dir = out_file.resolve().parent
+
     for attempt in range(1, max_retries + 1):
-        attempt_dir = Path(f"artifacts/crag_attempt_{attempt}")
+        attempt_dir = artifacts_dir / f"crag_attempt_{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
 
         if not quiet:
             err_console.rule(
-                f'[bold magenta]CRAG Loop Iteration {attempt}/{max_retries}[/bold magenta] | Query: [yellow]"{current_query}"[/yellow]'
+                f'[bold magenta]CRAG Loop Iteration {attempt}/{max_retries}[/bold magenta] | Query: [yellow]"{escape(current_query)}"[/yellow]'
             )
 
         # --- Phase 06: Query Orchestration ---
@@ -368,7 +396,7 @@ def main(
                 err_console.print(
                     f"[bold red]⚠ CRAG Verdict: REWRITE_REQUIRED[/bold red] "
                     f"(score={p09_out.grounded_confidence:.4f} < {crag_threshold:.4f})\n"
-                    f"[bold yellow]↻ Rewriting Query ->[/bold yellow] {next_query}"
+                    f"[bold yellow]↻ Rewriting Query ->[/bold yellow] {escape(next_query)}"
                 )
             current_query = next_query
         else:
@@ -383,10 +411,11 @@ def main(
                 )
             )
 
-    assert p09_out is not None
+    if p09_out is None:
+        raise RuntimeError("CRAG loop terminated without producing generation output.")
 
-    # Copy winning attempt's Phase 09 artifact to canonical path
-    canonical_p09 = Path("artifacts/09_generated.json")
+    # Copy winning attempt's Phase 09 artifact to canonical path under out_file's parent directory
+    canonical_p09 = artifacts_dir / "09_generated.json"
     canonical_p09.parent.mkdir(parents=True, exist_ok=True)
     canonical_p09.write_text(
         p09_out.model_dump_json(indent=2), encoding="utf-8"
@@ -396,7 +425,7 @@ def main(
     p10_raw = invoke_cli_phase(
         "p10_evaluate.py",
         input_json=p09_out.model_dump_json(),
-        args=["--out-file", "artifacts/10_evaluated.json"],
+        args=["--out-file", str(artifacts_dir / "10_evaluated.json")],
         quiet_child=quiet_children,
     )
     p10_out = Phase10EvalOutput.model_validate_json(p10_raw)
