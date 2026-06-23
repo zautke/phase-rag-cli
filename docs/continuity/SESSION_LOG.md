@@ -1,5 +1,15 @@
 # SESSION LOG
 
+## 2026-11-02 19:20 MDT — Comprehensive Architecture Map, Dual Agent Audit & KB Synchronization
+- Drafted complete, rigorous 10-phase architecture and mathematical reference document at `docs/architecture/phase_rag_pipeline_map.md` (919 lines).
+- Dispatched two specialized review subagents:
+  1. `Math & Algorithmic Reviewer` (`7a043376`): Formulated exact closed-form Lost-in-the-Middle piecewise permutation $\pi(r)$ and inverse $\pi^{-1}(j)$, exact chunk count formula $K = \lceil T/S \rceil$, guarded nDCG@k edge conditions, and $+0.25$ smoothed faithfulness metric.
+  2. `Systems & Pipeline Auditor` (`b630bab9`): Audited Qdrant tri-query execution in Phase 07, verified `deterministic_point_uuid(chunk_id)` seeding, reconciled CLI parameter defaults (P09 0.60 vs P00 0.65), and specified P00 in-memory stdin parsing and dual-mode query rewriting.
+- Integrated all reviewer findings into `docs/architecture/phase_rag_pipeline_map.md`.
+- Enforced strict `basic-memory` invariant: Knowledge base writes strictly route to `master-kb` (`projects/phase-rag-cli/Phase RAG Pipeline Complete Architectural and Mathematical Map.md`).
+- Re-indexed codebase using `jcodemunch` (138 symbols across 22 files).
+- Updated continuity document set under `docs/continuity/`.
+
 ## 2026-11-01 23:00 MDT — Continuity Set Initialization & Qdrant Clarification
 - Clarified Qdrant deployment topology: Runs by default in embedded mode writing to `./qdrant_storage` (or `--qdrant-path`), requiring no external Docker daemon or network services. Remote URLs are dynamically supported via `--qdrant-url` / `QDRANT_URL`.
 - Established canonical continuity set under `docs/continuity/` (`CURRENT_TASK_STATE.md`, `PLANS.md`, `TASKS.md`, `SESSION_LOG.md`, `REMEMBER.md`, `INSTRUCTIONAL_INSIGHTS.md`).
