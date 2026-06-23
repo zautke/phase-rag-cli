@@ -28,6 +28,9 @@ A modular, production-grade 10-phase UNIX-piped Hybrid Retrieval-Augmented Gener
   - [Answer Relevance](#4-answer-relevance)
   - [CRAG Grounded Confidence](#5-crag-grounded-confidence)
 - [UNIX Piping & Pipeline Recipes](#unix-piping--pipeline-recipes)
+  - [Exact Command Sequence: Execution on README.md](#exact-command-sequence-execution-on-readmemd)
+  - [Complete 10-Phase End-to-End Pipe](#complete-10-phase-end-to-end-pipe)
+  - [Modular Inference Only](#modular-inference-only-re-using-existing-indexed-qdrant-database)
 - [Verification & Test Battery](#verification--test-battery)
 - [Commit, Push & Pull Request (PR) Guide](#commit-push--pull-request-pr-guide)
 
@@ -360,7 +363,69 @@ classDiagram
 
 ## UNIX Piping & Pipeline Recipes
 
-The pipeline supports full zero-copy linear piping from ingestion to evaluation.
+The pipeline supports full zero-copy linear piping from ingestion to evaluation, as well as step-by-step isolated phase execution.
+
+### Exact Command Sequence: Execution on README.md
+
+To index `README.md`, formulate a query about Phase 08 Lost-in-the-Middle context assembly and Phase 10 eval metrics, and execute all 10 phases with complete artifact persistence, run the following command sequence:
+
+#### Option A: Step-by-Step Isolated Phase CLI Execution (PowerShell / Bash)
+```powershell
+# 1. Prepare artifact and storage directories
+mkdir -p artifacts/readme_run
+
+# 2. Phase 01: Ingest README.md
+uv run rag-p01 -s README.md -o artifacts/readme_run/01_loaded.json
+
+# 3. Phase 02: Normalize Markdown & frontmatter
+uv run rag-p02 -i artifacts/readme_run/01_loaded.json -o artifacts/readme_run/02_markdown.json
+
+# 4. Phase 03: Structural AST Header hierarchy parsing
+uv run rag-p03 -i artifacts/readme_run/02_markdown.json -o artifacts/readme_run/03_parsed.json
+
+# 5. Phase 04: Semantic sliding-window chunking
+uv run rag-p04 -i artifacts/readme_run/03_parsed.json -o artifacts/readme_run/04_chunked.json --max-words 80 --overlap 15
+
+# 6. Phase 05: Dense (Jina-v3) + Sparse (SPLADE) indexing into Qdrant
+uv run rag-p05 -i artifacts/readme_run/04_chunked.json -o artifacts/readme_run/05_indexed.json --collection readme_corpus --qdrant-path ./qdrant_readme
+
+# 7. Phase 06: Query decomposition & HyDE passage synthesis
+uv run rag-p06 -i artifacts/readme_run/05_indexed.json -o artifacts/readme_run/06_query_plan.json --query "How does Phase 08 Cross-Encoder reranking implement Lost-in-the-Middle context assembly and what eval metrics are computed in Phase 10?"
+
+# 8. Phase 07: Hybrid Prefetch + RRF Retrieval (k=60)
+uv run rag-p07 -i artifacts/readme_run/06_query_plan.json -o artifacts/readme_run/07_retrieved.json --qdrant-path ./qdrant_readme --top-k 6 --rrf-k 60
+
+# 9. Phase 08: Cross-Encoder reranking & Lost-in-the-Middle XML context assembly
+uv run rag-p08 -i artifacts/readme_run/07_retrieved.json -o artifacts/readme_run/08_reranked.json --backend fastembed --model jinaai/jina-reranker-v2-base-multilingual --top-n 4
+
+# 10. Phase 09: CRAG Grounding gate & cited answer generation
+uv run rag-p09 -i artifacts/readme_run/08_reranked.json -o artifacts/readme_run/09_generated.json --crag-threshold 0.50
+
+# 11. Phase 10: RAG Triad & nDCG metric evaluation
+uv run rag-p10 -i artifacts/readme_run/09_generated.json -o artifacts/readme_run/10_evaluated.json
+```
+
+#### Option B: Full Zero-Copy UNIX Pipe Execution
+```bash
+uv run rag-p01 -s README.md | \
+uv run rag-p02 | \
+uv run rag-p03 | \
+uv run rag-p04 --max-words 80 --overlap 15 | \
+uv run rag-p05 --collection readme_corpus --qdrant-path ./qdrant_readme | \
+uv run rag-p06 --query "How does Phase 08 Cross-Encoder reranking implement Lost-in-the-Middle context assembly and what eval metrics are computed in Phase 10?" | \
+uv run rag-p07 --qdrant-path ./qdrant_readme --top-k 6 --rrf-k 60 | \
+uv run rag-p08 --backend fastembed --top-n 4 | \
+uv run rag-p09 --crag-threshold 0.50 | \
+uv run rag-p10 > artifacts/readme_run/10_evaluated.json
+```
+
+#### Option C: Automated Python Demonstration Runner
+To execute all 10 stages sequentially and display the formatted generation payload and evaluation table:
+```bash
+uv run python run_readme_pipeline.py
+```
+
+---
 
 ### Complete 10-Phase End-to-End Pipe
 ```bash
