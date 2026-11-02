@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sota-hybrid-rag-cli"
+version = "0.1.0"
+description = "Decoupled 10-Phase SOTA Hybrid RAG CLI Pipeline with Pydantic v2 Tri-Plex I/O, Qdrant RRF, Jina-v3, SPLADE, and Autonomous CRAG Loopback"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9.0",
+    "typer>=0.12.5",
+    "rich>=13.9.0",
+    "qdrant-client>=1.17.0",
+    "fastembed>=0.6.0",
+    "sentence-transformers>=3.3.0",
+    "einops>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+rag-p00 = "p00_crag_orchestrator:app"
+rag-p01 = "p01_load:app"
+rag-p02 = "p02_markdown:app"
+rag-p03 = "p03_parse:app"
+rag-p04 = "p04_chunk:app"
+rag-p05 = "p05_index:app"
+rag-p06 = "p06_query:app"
+rag-p07 = "p07_retrieve:app"
+rag-p08 = "p08_rerank:app"
+rag-p09 = "p09_generate:app"
+rag-p10 = "p10_evaluate:app"
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "rag_contracts.py",
+    "hybrid_engine.py",
+    "p00_crag_orchestrator.py",
+    "p01_load.py",
+    "p02_markdown.py",
+    "p03_parse.py",
+    "p04_chunk.py",
+    "p05_index.py",
+    "p06_query.py",
+    "p07_retrieve.py",
+    "p08_rerank.py",
+    "p09_generate.py",
+    "p10_evaluate.py",
+]
+
+[tool.uv]
+managed = true
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
