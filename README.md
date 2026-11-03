@@ -21,6 +21,7 @@ A modular, production-grade 10-phase UNIX-piped Hybrid Retrieval-Augmented Gener
   - [Phase 09: CRAG Verification & Grounded Generation (`rag-p09`)](#phase-09-crag-verification--grounded-generation-rag-p09)
   - [Phase 10: RAG Triad & nDCG Evaluation (`rag-p10`)](#phase-10-rag-triad--ndcg-evaluation-rag-p10)
   - [Phase 00: Autonomous CRAG Loop Orchestrator (`rag-p00`)](#phase-00-autonomous-crag-loop-orchestrator-rag-p00)
+- [Pluggability](#pluggability)
 - [Evaluation Metrics Deep Dive](#evaluation-metrics-deep-dive)
   - [Normalized Discounted Cumulative Gain (nDCG@k)](#1-normalized-discounted-cumulative-gain-ndcgk)
   - [Context Precision](#2-context-precision)
@@ -155,8 +156,9 @@ cp .env.example .env
 - **Key Flags:**
   - `-i`, `--in-file`: Upstream parsed sections.
   - `-o`, `--out-file`: Output file path (default: `artifacts/04_chunked.json`).
-  - `-w`, `--max-words`: Sliding window chunk size in words (default: `100`).
-  - `-l`, `--overlap`: Word overlap between adjacent chunks (default: `20`).
+  - `-m`, `--max-words`: Chunk size in words (default: `60`, minimum `1`).
+  - `-v`, `--overlap`: Word overlap between adjacent chunks (default: `12`; ignored by `recursive`).
+  - `-s`, `--strategy`: Chunker name, `sliding_window` (default) or `recursive` (paragraph, then sentence, then word window). Unknown names exit 2 with the known names on stderr. See [Pluggability](#pluggability).
 - **Functionality:** Performs deterministic token-sliding window chunking while preserving the full section `parent_markdown` reference for contextual expansion.
 - **Example:**
   ```powershell
@@ -309,8 +311,23 @@ cp .env.example .env
 
 ---
 
-## Evaluation Metrics Deep Dive
+## Pluggability
 
+Every phase reads one strict JSON contract on stdin and writes the next on stdout, so swapping or adding a stage needs no framework.
+
+- **Chunking strategy.** `rag-p04 --strategy NAME` picks a chunker from the registry in `chunkers.py` (`sliding_window`, `recursive`). The chosen name is recorded in `Phase04ChunkedOutput.chunk_strategy`. Artifacts written before this field existed still validate (default `sliding_window`). To add a chunker, write a `(section, max_words, overlap) -> list[DocumentChunk]` function and register it in `CHUNKERS`. Chunk ids must be unique per section, because they derive the Qdrant point ids.
+- **External stage drop-in via pipe.** Any program that reads `Phase04ChunkedOutput` JSON on stdin and writes the same schema on stdout can sit between `rag-p04` and `rag-p05`. Nothing else changes.
+- **Pass-through stage pattern.** `rag-p04b` takes `Phase04ChunkedOutput` and emits it unchanged (stdout is byte-identical to its input, so `chunk_strategy` and `run_id` survive). As a side effect it writes `artifacts/04b_graph.json`, an entity co-occurrence graph (`GraphArtifact`: nodes, weighted edges, chunk ids) built with a heuristic extractor. Use this pattern for any stage that observes the stream and produces a side artifact.
+
+  ```powershell
+  uv run rag-p04 | uv run rag-p04b -g artifacts/04b_graph.json | uv run rag-p05
+  ```
+- **Deferred.** Nothing reads `04b_graph.json` yet. Graph-based one-hop expansion in `rag-p07` is intentionally not built.
+- **Contract change.** `Phase06QueryPlanOutput` carries `qdrant_collection` instead of the full P05 payload, so P06 output no longer embeds indexed records. Older 06/07 artifacts with `index_snapshot` are rejected; regenerate them.
+
+---
+
+## Evaluation Metrics Deep Dive
 Phase 10 (`rag-p10`) implements the **RAG Triad** framework supplemented by **nDCG@k** to provide objective verification of retrieval fidelity and generator alignment:
 
 ```mermaid
