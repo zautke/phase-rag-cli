@@ -93,6 +93,7 @@ class DocumentChunk(BaseModel):
 class Phase04ChunkedOutput(BasePhasePayload):
     phase_name: str = "04_chunking"
     chunks: list[DocumentChunk]
+    chunk_strategy: str = "sliding_window"
 
 
 class EnrichedIndexedChunk(BaseModel):

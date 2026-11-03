@@ -47,6 +47,8 @@ include = [
     "p02_markdown.py",
     "p03_parse.py",
     "p04_chunk.py",
+    "p04b_graph.py",
+    "chunkers.py",
     "p05_index.py",
     "p06_query.py",
     "p07_retrieve.py",

@@ -5,8 +5,8 @@ from typing import Annotated
 
 import typer
 
+from chunkers import resolve_chunker
 from rag_contracts import (
-    DocumentChunk,
     Phase03ParsedOutput,
     Phase04ChunkedOutput,
     PhaseCLI,
@@ -24,7 +24,7 @@ cli_engine = PhaseCLI(
 def Usage() -> str:
     return (
         "Usage: rag-p04 [--in-file / -i PATH] [--out-file / -o PATH] "
-        "[--max-words / -m INT] [--overlap / -v INT] [--quiet / -q]\n"
+        "[--max-words / -m INT] [--overlap / -v INT] [--strategy / -s NAME] [--quiet / -q]\n"
         "Segments parsed sections into overlapping word chunks while preserving parent Markdown."
     )
 
@@ -47,34 +47,22 @@ def main(
         int,
         typer.Option("--overlap", "-v", help="Sliding window word overlap"),
     ] = 12,
+    strategy: Annotated[
+        str,
+        typer.Option("--strategy", "-s", help="Chunker name (sliding_window|recursive)"),
+    ] = "sliding_window",
     quiet: Annotated[
         bool,
         typer.Option("--quiet", "-q", help="Suppress stderr Rich panel"),
     ] = False,
 ) -> None:
+    try:
+        chunker = resolve_chunker(strategy)
+    except KeyError as e:
+        raise typer.BadParameter(e.args[0]) from None
     upstream: Phase03ParsedOutput = cli_engine.load_upstream(in_file)
-    chunks: list[DocumentChunk] = []
-
-    for sec in upstream.sections:
-        words = sec.body.split()
-        step = max(1, max_words - overlap)
-        for idx, start in enumerate(range(0, max(1, len(words)), step)):
-            slice_words = words[start : start + max_words]
-            if not slice_words:
-                continue
-            chunks.append(
-                DocumentChunk(
-                    chunk_id=f"{sec.section_id}_chk_{idx}",
-                    parent_section_id=sec.section_id,
-                    doc_id=sec.doc_id,
-                    text=" ".join(slice_words),
-                    token_count=len(slice_words),
-                    header_hierarchy=sec.header_path,
-                    parent_markdown=f"### {' > '.join(sec.header_path)}\n{sec.body}",
-                )
-            )
-
-    output = Phase04ChunkedOutput(run_id=upstream.run_id, chunks=chunks)
+    chunks = [c for sec in upstream.sections for c in chunker(sec, max_words, overlap)]
+    output = Phase04ChunkedOutput(run_id=upstream.run_id, chunks=chunks, chunk_strategy=strategy)
     cli_engine.emit(output, out_file, quiet)
 
 
