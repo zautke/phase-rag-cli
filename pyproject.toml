@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sota-hybrid-rag-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Decoupled 10-Phase SOTA Hybrid RAG CLI Pipeline with Pydantic v2 Tri-Plex I/O, Qdrant RRF, Jina-v3, SPLADE, and Autonomous CRAG Loopback"
 readme = "README.md"
 requires-python = ">=3.11"
