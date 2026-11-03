@@ -41,7 +41,7 @@ def main(
     ] = Path("artifacts/04_chunked.json"),
     max_words: Annotated[
         int,
-        typer.Option("--max-words", "-m", help="Max words per child chunk"),
+        typer.Option("--max-words", "-m", min=1, help="Max words per child chunk"),
     ] = 60,
     overlap: Annotated[
         int,
