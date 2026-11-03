@@ -2,32 +2,35 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make chunking swappable (built-in + third-party), decouple P06 from the P05 payload, add a startup contract-topology check, and add a drop-in GraphRAG side-artifact stage, without touching the verified Tri-Plex pipe, `PhaseCLI`, or the strict contracts.
+Revision 2 (2026-11-02): incorporates three independent Opus plan reviews (executability, regression/platform risk, orchestration/simplicity). Changes from rev 1: `rag-check` task cut (duplicates `verify_pipeline.ps1:69-83`); entry-point discovery and contextual chunker deferred (spec item 7, YAGNI); `chunk_recursive` chunk-id collision fixed; strategy resolved before `load_upstream`; `rag-p04b` emits `upstream` unchanged; `uv sync --all-extras` everywhere; single sequential sonnet implementer; single opus reviewer; live-QA negatives added; version bump + `changeset.md` as last branch commit.
 
-**Architecture:** The UNIX pipe stays the plugin bus: any executable reading Phase N JSON and writing Phase N+1 JSON is a plugin. Inside a phase, a strategy is a plain function in a name→callable registry selected by a CLI flag, with third-party discovery via `importlib.metadata.entry_points`. New stages are pass-through CLIs (Phase N in → Phase N out) that write a side artifact. Everything is synchronous and corpus-level batched.
+**Goal:** Make chunking swappable, decouple P06 from the P05 payload, and add a drop-in GraphRAG side-artifact stage, without touching the verified Tri-Plex pipe, `PhaseCLI`, or the strict contracts.
 
-**Tech Stack:** Python ≥3.11, `uv`, Pydantic v2 (strict, `extra="forbid"`), Typer, Rich (stderr only), stdlib `importlib.metadata` + `re` + `urllib`. No new runtime dependencies.
+**Architecture:** The UNIX pipe stays the plugin bus: any executable reading Phase N JSON and writing Phase N+1 JSON is a plugin (no code needed). Inside a phase, a strategy is a plain function in a name→callable dict selected by a CLI flag. New stages are pass-through CLIs (Phase N in → Phase N out, byte-identical) that write a side artifact. Everything synchronous and corpus-level batched.
 
-**Spec:** `docs/rag_plugin_evolution_architecture.md` (original proposal) as amended by `docs/plans/2026-11-02-plugin-evolution-audit.md` (binding: the audit's "Adopted minimal architecture" section is the spec; the proposal's `PipelinePacket`/async/registry/JSONL constructs are rejected).
+**Tech Stack:** Python ≥3.11, `uv`, Pydantic v2 (strict, `extra="forbid"`), Typer, Rich (stderr only), stdlib `re`. No new runtime dependencies.
+
+**Spec:** `docs/plans/2026-11-02-plugin-evolution-audit.md` §"Adopted minimal architecture" (binding). `docs/rag_plugin_evolution_architecture.md` is the rejected original proposal.
 
 ## Global Constraints
 
-- Tri-Plex I/O law: stdout = raw `model_dump_json(indent=2)` only; stderr = Rich (`Console(stderr=True)`); disk = `--out-file`. Zero bare `print()`.
+- Tri-Plex I/O law: stdout = raw `model_dump_json(indent=2)` only; stderr = Rich (`err_console`); disk = `--out-file`. Zero bare `print()`.
 - Every CLI: `#!/usr/bin/env python`, `Usage()` function, every option has short + long switch, no positional args.
-- All Phase payloads: `ConfigDict(strict=True, extra="forbid")`. New fields on existing payloads must carry a default so prior producers still validate.
-- Every phase calls `cli_engine.load_upstream()` and `cli_engine.emit()`; P04 → P05 contract stays `Phase04ChunkedOutput`.
-- No new runtime dependency. No local LLM weights. LLM calls go to `RAG_OLLAMA_URL` from `.env` (SSoT; default in `.env.example` is `https://ollama2.braisenly.com`).
-- Windows (adagio): PowerShell only for commands; `verify_pipeline.ps1` and `.sh` must stay behavior-identical.
-- Existing 17 tests, `verify_pipeline.ps1` Stages 0-3 and `verify_pipeline.sh` must pass unchanged at every commit.
-- Conventional Commits with scope. Implementation runs on a new worktree branch `feat/minimal-pluggability` off `development`, draft PR into `development`, every commit pushed. Version bump `0.1.0 → 0.2.0` in the merge to `development` (MINOR, three numbers, no build suffix).
+- All payloads: `ConfigDict(strict=True, extra="forbid")`. New fields on existing payloads carry a default so prior producers still validate.
+- Every phase calls `cli_engine.load_upstream()` and `cli_engine.emit()`. P04 → P05 contract stays `Phase04ChunkedOutput`.
+- All file writes `encoding="utf-8"` (no BOM). New CLIs instantiate `PhaseCLI` at module level as `cli_engine` (this calls `ensure_utf8_streams()`).
+- Environment: always `uv sync --all-extras` (bare `uv sync` uninstalls the `dev` extra: pytest, ruff). Test gate: `uv run pytest -q` (currently 17 pass = 7 + 4 + 6). Lint gate: `uv run ruff check .`.
+- adagio (Windows): PowerShell only. `verify_pipeline.sh` parity is NOT run on adagio (Git-Bash banned); mark "not run" in the ledger.
+- No new runtime dependency. No local LLM weights.
+- Conventional Commits with scope. Work on worktree branch `feat/minimal-pluggability` off `development`, draft PR into `development`, every commit pushed. Last commit on the branch: `pyproject.toml` version `0.1.0 → 0.2.0` (MINOR, three numbers) + create `changeset.md` with the entry.
 
 ## Review Focus
 
-1. `--strategy` given an unknown name (typo, uninstalled third-party): must exit non-zero with the list of known names on stderr, nothing on stdout. Test in Task 1.
-2. Old `artifacts/04_chunked.json` (no `chunk_strategy` field) piped into P05: must still validate. Test in Task 1.
-3. Old `artifacts/06_query_plan.json` containing `index_snapshot`: must be rejected by `extra="forbid"` with a clear Pydantic error, not silently accepted. Test in Task 2.
-4. Section with empty body or a single very long sentence under `recursive`: must yield ≥1 chunk and never an empty-text chunk. Test in Task 1.
-5. `rag-p04b` with a corpus that yields zero entities: must still pass the Phase04 payload through unchanged and write a graph artifact with empty lists. Test in Task 4.
+1. `--strategy` unknown name: exit 2, stderr lists known names, stdout empty, and this happens before any stdin read. Test: Task 1 `test_p04_cli_unknown_strategy_exit2_clean_stdout`.
+2. Legacy `artifacts/04_chunked.json` (no `chunk_strategy`) piped into P05: validates. Test: Task 1 `test_phase04_output_without_chunk_strategy_still_validates`.
+3. Legacy Phase06 JSON with `index_snapshot`: rejected with `extra_forbidden`. Test: Task 2 `test_phase06_rejects_legacy_index_snapshot`. Note cascade: `Phase07RetrievedOutput.query_plan` nests Phase06, so legacy 07 artifacts also stop validating into P08 (accepted; artifacts are regenerated per run).
+4. `recursive` on a section with two sentences each longer than `max_words`: all `chunk_id`s unique (UUIDv5 collision = silent Qdrant overwrite). Test: Task 1 `test_recursive_chunk_ids_unique_for_long_sentences`.
+5. `rag-p04b` must not relabel `chunk_strategy` or regenerate `run_id`: stdout byte-equal to input. Test: Task 4 `test_p04b_passthrough_byte_identical`.
 
 ---
 
@@ -36,159 +39,142 @@
 **Files:**
 - Create: `chunkers.py`
 - Modify: `rag_contracts.py:93-95` (`Phase04ChunkedOutput`)
-- Modify: `p04_chunk.py:33-78` (`main`)
-- Modify: `pyproject.toml` (`[tool.hatch.build.targets.wheel].include` add `chunkers.py`; add `[project.entry-points."phase_rag.chunkers"]` with the built-ins so the entry-point path is exercised)
+- Modify: `p04_chunk.py:33-78` (`main`), `p04_chunk.py:24-29` (`Usage`)
+- Modify: `pyproject.toml:42-56` (wheel `include`: add `chunkers.py` and `p04b_graph.py` now, so Task 4 does not touch this hunk)
 - Test: `tests/test_chunkers.py`
 
 **Interfaces:**
-- Produces in `chunkers.py`:
-  - `Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]` (args: section, max_words, overlap)
-  - `def chunk_sliding_window(sec: ParsedSection, max_words: int, overlap: int) -> list[DocumentChunk]` (verbatim move of the loop body at `p04_chunk.py:56-73`)
-  - `def chunk_recursive(sec: ParsedSection, max_words: int, overlap: int) -> list[DocumentChunk]` (split on `\n\n`; paragraphs over `max_words` split on `(?<=[.!?])\s+`; sentences over `max_words` fall back to `chunk_sliding_window`; `overlap` ignored; `chunk_id=f"{sec.section_id}_rec_{idx}"`)
-  - `BUILTIN_CHUNKERS: dict[str, Chunker] = {"sliding_window": ..., "recursive": ...}`
-  - `def resolve_chunker(name: str) -> Chunker` (built-ins first, then `importlib.metadata.entry_points(group="phase_rag.chunkers")` by name, each `.load()` in its own try/except; raise `KeyError(f"Unknown chunker '{name}'. Known: {sorted(...)}")`)
-  - `def available_chunkers() -> list[str]`
-- Produces in `rag_contracts.py`: `Phase04ChunkedOutput.chunk_strategy: str = "sliding_window"`
-- Produces in `p04_chunk.py`: option `--strategy/-s` (default `"sliding_window"`); on `KeyError` from `resolve_chunker` → `typer.BadParameter` (exit 2, message to stderr).
+- `chunkers.py`:
+  - `Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]` (section, max_words, overlap)
+  - `def _windows(words: list[str], max_words: int, overlap: int) -> list[list[str]]` (step `max(1, max_words - overlap)`; identical slicing to the legacy loop at `p04_chunk.py:56-64`; empty `words` → `[]`)
+  - `def _make_chunk(sec: ParsedSection, chunk_id: str, words: list[str]) -> DocumentChunk` with `token_count=len(words)`, `header_hierarchy=sec.header_path`, `parent_markdown=f"### {' > '.join(sec.header_path)}\n{sec.body}"`
+  - `def chunk_sliding_window(sec, max_words, overlap) -> list[DocumentChunk]`: `chunk_id=f"{sec.section_id}_chk_{idx}"` (legacy parity, including the legacy quirk that an empty body yields zero chunks)
+  - `def chunk_recursive(sec, max_words, overlap) -> list[DocumentChunk]`: split `sec.body` on `\n\n` (strip, drop empties); no packing of short paragraphs; a paragraph with more than `max_words` words is split on `(?<=[.!?])\s+`; a sentence with more than `max_words` words is split by `_windows(words, max_words, 0)`; ONE running counter across the whole section: `chunk_id=f"{sec.section_id}_rec_{n}"`; `overlap` ignored; empty/whitespace body → `[]`.
+  - `CHUNKERS: dict[str, Chunker] = {"sliding_window": chunk_sliding_window, "recursive": chunk_recursive}`
+  - `def resolve_chunker(name: str) -> Chunker`: `KeyError(f"Unknown chunker '{name}'. Known: {', '.join(sorted(CHUNKERS))}")`
+- `rag_contracts.py`: `Phase04ChunkedOutput.chunk_strategy: str = "sliding_window"`
+- `p04_chunk.py`: option `--strategy/-s` default `"sliding_window"`; FIRST statement of `main` is `try: chunker = resolve_chunker(strategy) except KeyError as e: raise typer.BadParameter(e.args[0])` (exit 2, stderr, before `load_upstream`); then `upstream = cli_engine.load_upstream(in_file)`; `chunks = [c for sec in upstream.sections for c in chunker(sec, max_words, overlap)]`; `Phase04ChunkedOutput(run_id=upstream.run_id, chunks=chunks, chunk_strategy=strategy)`. `Usage()` gains the `--strategy / -s` line.
 
-- [ ] **Step 1: Write failing tests** in `tests/test_chunkers.py`
+- [ ] **Step 1: Write failing tests** in `tests/test_chunkers.py` (fixture: `ParsedSection(section_id="s", doc_id="d", header_path=["H1","H2"], body=..., metadata={})`)
 
 ```python
-def test_sliding_window_matches_legacy_output(): ...   # same chunk_ids/text as current p04 for a fixed section (max_words=8, overlap=2)
-def test_recursive_splits_paragraphs_then_sentences(): ...  # 2 paragraphs, 2nd has 3 sentences > max_words -> chunk per sentence, no empty text
-def test_recursive_empty_body_yields_one_chunk(): ...
-def test_resolve_chunker_unknown_lists_known_names(): ...  # KeyError message contains "sliding_window"
-def test_resolve_chunker_via_entry_point(): ...  # entry point "sliding_window" resolves to chunk_sliding_window (requires `uv sync`)
-def test_phase04_output_without_chunk_strategy_still_validates(): ...
-def test_p04_cli_unknown_strategy_exit_nonzero_clean_stdout(tmp_path): ...  # subprocess: stdout == b"", exit != 0, "Known" in stderr
+def test_sliding_window_legacy_parity():
+    # body = " ".join(f"w{i}" for i in range(20)), max_words=8, overlap=2
+    # ids == ["s_chk_0","s_chk_1","s_chk_2","s_chk_3"]; starts 0,6,12,18; last text == "w18 w19"
+def test_recursive_paragraphs_then_sentences():
+    # body = "Alpha beta gamma.\n\nOne two three. Four five six. Seven eight nine.", max_words=5
+    # texts == ["Alpha beta gamma.","One two three.","Four five six.","Seven eight nine."]; ids s_rec_0..s_rec_3
+def test_recursive_chunk_ids_unique_for_long_sentences():
+    # two sentences of 12 words each, max_words=5 -> 6 chunks, len(set(ids)) == 6, no empty text
+def test_recursive_empty_body_yields_no_chunks():  # body="  \n\n " -> []
+def test_resolve_chunker_unknown_lists_known_names():  # KeyError, "sliding_window" and "recursive" in e.args[0]
+def test_phase04_output_without_chunk_strategy_still_validates():  # model_validate(dict without the key).chunk_strategy == "sliding_window"
+def test_p04_cli_unknown_strategy_exit2_clean_stdout(tmp_path):
+    # subprocess [sys.executable, "p04_chunk.py", "-s", "nope", "-i", <valid 03 json>, "-o", tmp], stdin=DEVNULL
+    # returncode == 2, stdout == b"", b"Known:" in stderr
 ```
 
-- [ ] **Step 2:** `uv run pytest tests/test_chunkers.py -v` → FAIL (`ModuleNotFoundError: chunkers`)
-- [ ] **Step 3:** Implement `chunkers.py` and the three modifications above. `p04_chunk.main` body becomes: resolve chunker → `chunks = [c for sec in upstream.sections for c in chunker(sec, max_words, overlap)]` → `Phase04ChunkedOutput(run_id=..., chunks=chunks, chunk_strategy=strategy)`.
-- [ ] **Step 4:** `uv sync && uv run pytest -q` → all pass (17 existing + 7 new).
-- [ ] **Step 5:** `uv run ruff check .` → clean.
-- [ ] **Step 6: Commit** `feat(p04): chunker registry with --strategy and entry-point discovery`
+- [ ] **Step 2:** `uv run pytest tests/test_chunkers.py -v` → FAIL (`ModuleNotFoundError: chunkers`).
+- [ ] **Step 3:** Implement `chunkers.py` and the modifications above.
+- [ ] **Step 4:** `uv sync --all-extras && uv run pytest -q` → 24 pass. `uv run ruff check .` → clean.
+- [ ] **Step 5: Commit** `feat(p04): chunker registry with --strategy (sliding_window|recursive)`
 
 ### Task 2: Decouple P06 from the P05 payload
 
 **Files:**
-- Modify: `rag_contracts.py:124` (replace `index_snapshot: Phase05IndexedOutput` with `qdrant_collection: str`)
-- Modify: `p06_query.py:80` (`qdrant_collection=upstream.qdrant_collection`)
+- Modify: `rag_contracts.py:124` (`index_snapshot: Phase05IndexedOutput` → `qdrant_collection: str`)
+- Modify: `p06_query.py:80` (`index_snapshot=upstream` → `qdrant_collection=upstream.qdrant_collection`; line 79 `metadata_filters={"collection": ...}` stays, `tests/test_p06_p08_p09_p10_p00.py:301` asserts it)
 - Modify: `p07_retrieve.py:86` (`collection = upstream.qdrant_collection`)
-- Modify: `tests/test_p05_and_p07.py:192`
-- Modify: `p00_crag_orchestrator.py` only if it reads `index_snapshot` (audit found no reference; confirm with `rg index_snapshot`)
+- Modify: `tests/test_p05_and_p07.py:192` (`qdrant_collection=out05_disk.qdrant_collection`)
+- Modify: `docs/architecture/phase_rag_pipeline_map.md` Phase 06 §6-7 (replace `index_snapshot` mentions)
 - Test: `tests/test_p06_decoupled.py`
 
-**Interfaces:**
-- Consumes: nothing from Task 1.
-- Produces: `Phase06QueryPlanOutput.qdrant_collection: str`. P06 input model stays `Phase05IndexedOutput` (so `rag-p05 | rag-p06` is unchanged); `p06` may also be run with a hand-written minimal Phase05 payload (`indexed_records: []`).
+**Interfaces:** Produces `Phase06QueryPlanOutput.qdrant_collection: str`. P06 `input_model` stays `Phase05IndexedOutput`; `p00_crag_orchestrator.py` feeds full P05 JSON to P06 each attempt (unchanged, verified: no `index_snapshot` reader remains besides the two lines above).
 
 - [ ] **Step 1: Failing tests**
 
 ```python
-def test_phase06_rejects_legacy_index_snapshot(): ...  # ValidationError, "extra_forbidden"
-def test_phase06_payload_is_small(): ...  # model_dump_json() of a plan has no "indexed_records" key
+def test_phase06_rejects_legacy_index_snapshot():
+    # valid plan dict + {"index_snapshot": {}} -> ValidationError; "extra_forbidden" in {e["type"] for e in exc.errors()}
+def test_phase06_payload_has_no_indexed_records():  # "indexed_records" not in plan.model_dump_json()
 ```
 
-- [ ] **Step 2:** `uv run pytest tests/test_p06_decoupled.py -v` → FAIL.
-- [ ] **Step 3:** Apply the four edits.
-- [ ] **Step 4:** `uv run pytest -q` → pass (live p05/p07 test included).
-- [ ] **Step 5: Commit** `refactor(contracts): P06 carries qdrant_collection instead of full P05 snapshot`
+- [ ] **Step 2:** FAIL. **Step 3:** apply the edits. **Step 4:** `uv run pytest -q` → 26 pass (includes live p05/p07). **Step 5: Commit** `refactor(contracts): P06 carries qdrant_collection instead of full P05 snapshot`
 
-### Task 3: `rag-check` topology command
-
-**Files:**
-- Create: `rag_check.py`
-- Modify: `pyproject.toml` (`[project.scripts] rag-check = "rag_check:app"`, wheel include)
-- Test: `tests/test_rag_check.py`
-
-**Interfaces:**
-- Produces: `PHASE_MODULES: list[str] = ["p01_load", ..., "p10_evaluate"]`; `def check_chain(modules: list[str]) -> list[str]` returning human-readable mismatch lines (empty = OK), comparing `importlib.import_module(m).cli_engine.output_model` with `import_module(next).cli_engine.input_model` (identity). CLI: `--json/-j` (emit `{"ok": bool, "chain": [...], "errors": [...]}` on stdout), `--quiet/-q`. Exit 1 on any error. Must not instantiate embedders (imports only; `hybrid_engine` loaders are lazy singletons, confirmed).
-
-- [ ] **Step 1: Failing tests**
-
-```python
-def test_check_chain_ok_on_real_modules(): assert check_chain(PHASE_MODULES) == []
-def test_check_chain_reports_mismatch(): ...  # monkeypatch p04.cli_engine.output_model to Phase03ParsedOutput -> one error naming "p04_chunk -> p05_index"
-def test_rag_check_cli_json_stdout_only(tmp_path): ...  # subprocess --json: stdout parses, "ok": true
-```
-
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement (~40 LOC). **Step 4:** `uv run pytest -q`; `uv run rag-check` exit 0.
-- [ ] **Step 5: Commit** `feat(cli): rag-check adjacency contract validator`
-
-### Task 4: GraphRAG side-artifact stage `rag-p04b`
+### Task 3: GraphRAG side-artifact stage `rag-p04b`
 
 **Files:**
 - Create: `p04b_graph.py`
-- Modify: `rag_contracts.py` (append `GraphNode`, `GraphEdge`, `GraphArtifact(BasePhasePayload)` with `phase_name="04b_graph"`, `nodes: list[GraphNode]`, `edges: list[GraphEdge]`, `extractor: str`)
-- Modify: `pyproject.toml` (`rag-p04b = "p04b_graph:app"`, wheel include)
+- Modify: `rag_contracts.py` (append `GraphNode`, `GraphEdge`, `GraphArtifact`)
+- Modify: `pyproject.toml:28-40` (`rag-p04b = "p04b_graph:app"`)
 - Test: `tests/test_p04b_graph.py`
 
 **Interfaces:**
-- `GraphNode(entity: str, chunk_ids: list[str])`, `GraphEdge(source: str, target: str, weight: int, chunk_ids: list[str])`.
-- CLI options: `--in-file/-i`, `--out-file/-o` (default `artifacts/04b_passthrough.json`, Phase04 payload unchanged), `--graph-file/-g` (default `artifacts/04b_graph.json`), `--extractor/-e` (`heuristic` default), `--min-weight/-w` (default 1), `--quiet/-q`.
-- `def extract_entities_heuristic(text: str) -> list[str]`: regex `\b[A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+)*\b`, drop single-token matches that are sentence-initial stopwords (`The, A, An, This, It, In, On, For`), dedupe, keep ≥2 chars.
-- Edges: all unordered entity pairs co-occurring in one chunk; weight = number of chunks.
-- `cli_engine = PhaseCLI("Phase 04b: Entity Graph (pass-through)", Phase04ChunkedOutput, Phase04ChunkedOutput, "artifacts/04b_passthrough.json")`; graph artifact written with `GraphArtifact.model_dump_json(indent=2)` to `--graph-file` and a second Rich panel on stderr (node/edge counts, top-5 entities).
-- `# ponytail: heuristic NER; upgrade path = --extractor ollama (Task 6 pattern) or spaCy`.
+- `GraphNode(BaseModel)`: `entity: str`, `chunk_ids: list[str]`. `GraphEdge(BaseModel)`: `source: str`, `target: str`, `weight: int`, `chunk_ids: list[str]`. Both strict/forbid like the other item models.
+- `GraphArtifact(BasePhasePayload)`: `phase_name: str = "04b_graph"`, `extractor: str`, `nodes: list[GraphNode]`, `edges: list[GraphEdge]`; constructed with `run_id=upstream.run_id`.
+- `def extract_entities_heuristic(text: str) -> list[str]`: regex `\b[A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+)*\b`; drop matches in `{"The","A","An","This","It","In","On","For","And","But"}`; dedupe preserving order. `# ponytail: heuristic NER; upgrade = --extractor ollama|spacy`.
+- `def build_graph(chunks: list[DocumentChunk]) -> tuple[list[GraphNode], list[GraphEdge]]`: edges = unordered pairs co-occurring in a chunk; `weight` = number of chunks; `source < target` lexically; sorted by `-weight, source, target`.
+- CLI options: `--in-file/-i`, `--out-file/-o` (default `artifacts/04b_passthrough.json`), `--graph-file/-g` (default `artifacts/04b_graph.json`), `--extractor/-e` (`heuristic`; any other value → `typer.BadParameter`), `--min-weight/-w` (default 1, drop edges below), `--quiet/-q`.
+- `cli_engine = PhaseCLI("Phase 04b: Entity Graph (pass-through)", Phase04ChunkedOutput, Phase04ChunkedOutput, "artifacts/04b_passthrough.json")`. `main`: `upstream = cli_engine.load_upstream(in_file)`; build graph; `graph_file.write_text(GraphArtifact(...).model_dump_json(indent=2), encoding="utf-8")`; second Rich panel on stderr (node/edge counts, top-5 entities) unless quiet; **`cli_engine.emit(upstream, out_file, quiet)`** (pass the upstream object itself; never rebuild it, so `chunk_strategy`, `run_id`, `timestamp` survive and stdout is byte-identical).
+- Consumer of `04b_graph.json`: none yet (P07 one-hop expansion deferred, YAGNI). README states this.
 
 - [ ] **Step 1: Failing tests**
 
 ```python
-def test_extract_entities_heuristic_basic(): ...  # "Qdrant fuses Jina-v3 with SPLADE." -> {"Qdrant","Jina-v3","SPLADE"}
-def test_graph_edges_from_cooccurrence(): ...  # 2 chunks sharing entities -> weight 2
-def test_p04b_passthrough_unchanged_and_graph_written(tmp_path): ...  # subprocess: stdout JSON == input JSON (modulo timestamp), graph file validates GraphArtifact
-def test_p04b_zero_entities_still_passes_through(tmp_path): ...
+def test_extract_entities_heuristic_basic():  # "Qdrant fuses Jina-v3 with SPLADE. The end." -> ["Qdrant","Jina-v3","SPLADE"]
+def test_build_graph_cooccurrence_weight():  # 2 chunks both mention Qdrant+SPLADE -> one edge weight 2, chunk_ids len 2
+def test_p04b_passthrough_byte_identical(tmp_path):
+    # input = rag-p04 -s recursive output JSON (so chunk_strategy != default); subprocess rag-p04b -i in -o out -g g
+    # stdout == input bytes (+ trailing "\n" per PhaseCLI.emit); GraphArtifact.model_validate_json(g) ok; run_id equal
+def test_p04b_zero_entities_still_passes_through(tmp_path):  # lowercase-only corpus -> nodes == [] and edges == [], exit 0
 ```
 
-- [ ] **Step 2-4:** FAIL → implement (~90 LOC) → `uv run pytest -q`; pipe smoke: `uv run rag-p03 -i artifacts/02_markdown.json | uv run rag-p04 | uv run rag-p04b | uv run rag-p05 --quiet` exit 0.
+- [ ] **Step 2:** FAIL. **Step 3:** implement (~90 LOC). **Step 4:** `uv run pytest -q` → 30 pass; ruff clean; smoke: `uv run rag-p03 -i artifacts/02_markdown.json | uv run rag-p04 | uv run rag-p04b | uv run rag-p05 -q` exit 0.
 - [ ] **Step 5: Commit** `feat(p04b): GraphRAG entity co-occurrence side-artifact stage`
 
-### Task 5: Verification batteries + docs
+### Task 4: Verification batteries + docs + version
 
 **Files:**
-- Modify: `verify_pipeline.ps1` (Stage 0: add `uv run rag-check`; Stage 1: after Phase 04, exercise `rag-p04 --strategy recursive` and `rag-p04b`; Stage 2 pipe unchanged)
-- Modify: `verify_pipeline.sh` (identical additions)
-- Modify: `README.md` (section "Pluggability": strategy flag, entry-point group, pass-through stage pattern, `rag-check`)
-- Modify: `docs/continuity/CURRENT_TASK_STATE.md`, `PLANS.md`
-- Modify: `pyproject.toml` version stays `0.1.0` on the feature branch; MINOR bump happens in the merge commit to `development` per policy.
+- Modify: `verify_pipeline.ps1` and `verify_pipeline.sh` identically:
+  - Stage 0 print-audit file list (`.ps1:53-58`): add `chunkers.py`, `p04b_graph.py`.
+  - Stage 0 chain (`.ps1:69-83`): insert `p04b_graph` between `p04_chunk` and `p05_index` (its in/out are both `Phase04ChunkedOutput`, so the identity assertion holds).
+  - Stage 1 after Phase 04 (`.ps1:162-171`): (a) `rag-p04 -i artifacts/03_parsed.json -o artifacts/04_chunked_recursive.json -s recursive` (separate file; canonical `04_chunked.json` untouched so Stages 2-3 are unchanged), validate; (b) `rag-p04b -i artifacts/04_chunked.json -o artifacts/04b_passthrough.json -g artifacts/04b_graph.json`, validate both; (c) negative: `rag-p04 -s nope -i artifacts/03_parsed.json -o artifacts/_neg.json` with `-RedirectStandardError`, assert `$proc.ExitCode -eq 2` and stderr contains `Known:` (PASS = declared failure).
+- Modify: `README.md` (section "Pluggability": `--strategy`, external stage drop-in via pipe, pass-through stage pattern, `04b_graph.json` consumer deferred).
+- Modify: `docs/continuity/CURRENT_TASK_STATE.md`, `docs/continuity/PLANS.md`.
+- Final commit only: `pyproject.toml:7` `version = "0.2.0"`; create `changeset.md` with a `## 0.2.0` entry listing Tasks 1-3.
 
-- [ ] **Step 1:** Edit both scripts; keep the `$proc = Start-Process ... -RedirectStandardOutput/Error` pattern used at `verify_pipeline.ps1:165`.
-- [ ] **Step 2:** `pwsh -File verify_pipeline.ps1` → Stages 0-3 PASS with new sub-steps visible. (`verify_pipeline.sh` run by the Bash-capable reviewer on largo or Git-Bash only as a parity check, never as the adagio gate.)
-- [ ] **Step 3: Commit** `test(verify): exercise rag-check, --strategy recursive, rag-p04b in batteries`
-
-### Task 6 (optional, last): `contextual` chunker via cloud Ollama
-
-**Files:** `chunkers.py` (+`chunk_contextual`), `.env.example` (`RAG_OLLAMA_URL`, `RAG_OLLAMA_MODEL=gpt-oss:20b-cloud`), `tests/test_chunkers_live.py` (marked `live`, skipped without `RAG_OLLAMA_URL`).
-
-**Interfaces:** `chunk_contextual` = `chunk_sliding_window` then one HTTP call per chunk (`urllib.request`, `POST {RAG_OLLAMA_URL}/api/generate`, prompt from Anthropic's contextual-retrieval recipe) prepending a one-sentence situating prefix to `text`; `parent_markdown` unchanged. Registered as `"contextual"`. On HTTP failure: fall back to the un-prefixed chunk and log once to stderr.
-
-- [ ] Steps: failing live test → implement (~40 LOC) → `uv run pytest -m live -q` → commit `feat(p04): contextual chunker via RAG_OLLAMA_URL`.
+- [ ] **Step 1:** Edit both scripts (keep the `Start-Process … -RedirectStandardOutput/-RedirectStandardError` pattern; add `$proc.ExitCode` checks to the new steps).
+- [ ] **Step 2:** `pwsh -File verify_pipeline.ps1` → Stages 0-3 PASS with the new sub-steps visible.
+- [ ] **Step 3: Commit** `test(verify): rag-p04 --strategy recursive, rag-p04b and negative strategy test in batteries`
+- [ ] **Step 4:** README + continuity → commit `docs: pluggability section and continuity update`.
+- [ ] **Step 5:** version + changeset → commit `chore(release): 0.2.0`.
 
 ---
 
 ## Orchestration: implementation → review → live exercise
 
-Token-efficiency rules (all agents): brief = this plan's task section + the Interfaces blocks it consumes, nothing else; use codemunch for all code reads (`repo zautke/phase-rag-cli`, re-index after edits with `register_edit`); report ≤250 words: files touched, test command + pass count, ruff result, open questions. No file dumps back to lead. Lead monitors every agent with a 20-min deadline and does the work inline on timeout.
+Token rules: brief = one task section + the Interfaces blocks it consumes; code reads via codemunch (`repo zautke/phase-rag-cli`, `register_edit` after edits); reports ≤250 words (files, test command + count, ruff, open questions); no file dumps. Lead arms a 20-min deadline per wave and does the work inline on timeout. One worktree, one implementer: no concurrent `uv sync`/pytest on Windows (`.venv` file locks, fastembed cache race).
 
-| Wave | Agent | Model | Scope (file lock) | Gate |
+| W | Agent | Model | Scope | Gate |
 |---|---|---|---|---|
-| 0 | lead | — | worktree `feat/minimal-pluggability` off `development`, draft PR, `.env.example` | `uv sync`, `uv run pytest -q` = 17 pass |
-| 1 (parallel) | impl-A | sonnet | Task 1: `chunkers.py`, `p04_chunk.py`, `rag_contracts.py` (Phase04 only), `pyproject.toml` (entry-points + include), `tests/test_chunkers.py` | its tests + full suite green, ruff clean |
-| 1 (parallel) | impl-B | sonnet | Task 2: `rag_contracts.py` (Phase06 only), `p06_query.py`, `p07_retrieve.py`, `tests/test_p05_and_p07.py`, `tests/test_p06_decoupled.py` | same |
-| 1 (parallel) | impl-C | sonnet | Task 3: `rag_check.py`, `pyproject.toml` (scripts), `tests/test_rag_check.py` | same |
-| 1 → merge | lead | — | resolve `rag_contracts.py`/`pyproject.toml` overlaps (disjoint hunks; rebase order A, B, C) | full suite green |
-| 2 | impl-D | sonnet | Task 4: `p04b_graph.py`, `rag_contracts.py` (Graph models), `pyproject.toml`, `tests/test_p04b_graph.py` | same + pipe smoke |
-| 2 (parallel) | impl-E | sonnet | Task 5 scripts + README + continuity | `verify_pipeline.ps1` Stages 0-3 PASS |
-| 3 | review-1 | opus | whole-branch diff review: correctness vs plan Interfaces, Tri-Plex law, strict contracts, Windows BOM path | findings list; impl agents fix; re-review |
-| 3 (parallel) | review-2 | opus | `ponytail-review` (over-engineering only) + `rag-check`/`chunkers` API reuse audit | findings; fixes |
-| 4 | live-QA | opus | adagio PowerShell: `pwsh -File verify_pipeline.ps1`; isolated runs of `rag-p04 -s recursive`, `rag-p04b`, `rag-check --json`, unknown-strategy negative test (expected exit 2, empty stdout); full pipe `rag-p01 | … | rag-p10`; `rag-p00 --crag-threshold 0.92` convergence; capture stderr panels + artifact listings into kb run-ledger note `projects/phase-rag-cli/run-ledger` | all PASS; negatives PASS = declared failure |
-| 5 | lead | — | Task 6 only if Waves 1-4 green; then PR ready-for-review, wait for review bots, address, merge to `development` with `pyproject.toml` version `0.2.0` + `changeset.md` entry | PR merged |
+| 0 | lead | — | worktree `feat/minimal-pluggability` off `development`, draft PR, `uv sync --all-extras` | `uv run pytest -q` = 17 pass |
+| 1 | impl-1 | sonnet | Task 1 then Task 2 (sequential, same context) | 26 pass, ruff clean, pushed |
+| 2 | impl-1 (SendMessage, context kept) | sonnet | Task 3 | 30 pass, p03→p05 pipe smoke |
+| 3 | impl-1 | sonnet | Task 4 steps 1-4 | `verify_pipeline.ps1` Stages 0-3 PASS |
+| 4 | review-1 | opus | whole-branch diff: correctness vs Interfaces, Tri-Plex, strict contracts, Windows UTF-8, AND over-engineering (ponytail lens) | findings → impl-1 fixes → re-review PASS |
+| 5 | live-QA | opus | adagio PowerShell: `pwsh -File verify_pipeline.ps1`; goal pipe `rag-p01 \| rag-p02 \| rag-p03 \| rag-p04 -s recursive \| rag-p04b \| rag-p05 \| rag-p06 \| rag-p07 \| rag-p08 \| rag-p09 \| rag-p10`; `rag-p00 --crag-threshold 0.92` convergence; three negatives (unknown strategy exit 2; legacy 04 JSON without `chunk_strategy` into `rag-p05` validates; legacy 06 JSON with `index_snapshot` into `rag-p07` rejected); metrics baseline; kb run-ledger note `projects/phase-rag-cli/run-ledger` (kb down → stage to `~/.claude/deferred-kb-sync/`); `.sh` parity marked "not run on adagio" | all PASS, negatives PASS = declared failure |
+| 6 | lead | — | Task 4 step 5 (0.2.0 + changeset), PR ready-for-review, wait for review bots, address per org rules, merge to `development` | merged |
 
-Metrics registry (hard test metrics directive): register `chunk_count_sliding`, `chunk_count_recursive`, `graph_nodes`, `graph_edges`, `p04_wall_ms`, `p04b_wall_ms`, `rag_check_wall_ms` on the Wave 4 run; bands reported, not gating.
+Metrics registry (binding directive; recorded every later run): `chunk_count_sliding`, `chunk_count_recursive`, `graph_nodes`, `graph_edges`, `p04_wall_ms`, `p04b_wall_ms`. Warning bands set from the Wave 5 first-run baseline (±25% moderate, ±50% high, ±100% critical), reported not gating.
+
+## Deferred (recorded, not planned)
+
+- Entry-point discovery `importlib.metadata.entry_points(group="rag.chunkers")`: spec item 7, only when a third-party chunker exists.
+- `contextual` chunker via cloud Ollama: one HTTP call per chunk, live-only test; revisit with a budget.
+- P07 one-hop graph expansion (consumer of `04b_graph.json`); late chunking; ColBERT slot; Qdrant `FormulaQuery` (local-mode support unverified).
 
 ## Self-review
 
-- Spec coverage: audit §"Adopted minimal architecture" items 1-7 → Tasks 1 (2, 3, 7), 2 (4), 3 (6), 4 (5), 5 (batteries); item 1 (keep pipe) is a constraint. Contextual chunking (SOTA research §5) → Task 6.
-- Type consistency: `Chunker` signature identical in Task 1 Interfaces, `chunk_recursive`, Task 6; `qdrant_collection: str` used identically in Tasks 2 and 4b smoke; `cli_engine` module attribute confirmed present in all 11 phase modules.
-- Not planned (YAGNI, recorded): P07 one-hop graph expansion; late chunking; ColBERT slot; `FormulaQuery` boosting (local-mode support unverified); pluggy.
+- Spec coverage: audit items 1 (constraint), 2 (Task 1), 3 (README, Task 4), 4 (Task 2), 5 (Task 3), 6 (cut: already in Stage 0), 7 (deferred).
+- Type consistency: `Chunker` signature used identically in Task 1 and `p04.main`; `qdrant_collection: str` in Tasks 2 and 3 smoke; `GraphArtifact.run_id` sourced from `upstream.run_id`; `cli_engine` attribute present in all 11 phase modules (verified) and required in `p04b_graph.py` for the Stage 0 chain import.
+- Test counts: 17 → 24 → 26 → 30.
