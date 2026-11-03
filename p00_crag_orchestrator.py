@@ -220,7 +220,7 @@ def main(
         typer.Option(
             "--rerank-model",
             "-m",
-            help="Cross-Encoder model name (fastembed backend swaps the default to the Jina v2 ONNX model)",
+            help="Cross-Encoder model name (with -b fastembed the torch default maps to jinaai/jina-reranker-v2-base-multilingual)",
         ),
     ] = "BAAI/bge-reranker-v2-m3",
     prefetch_limit: Annotated[
