@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sota-hybrid-rag-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Decoupled 10-Phase SOTA Hybrid RAG CLI Pipeline with Pydantic v2 Tri-Plex I/O, Qdrant RRF, Jina-v3, SPLADE, and Autonomous CRAG Loopback"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,7 @@ rag-p01 = "p01_load:app"
 rag-p02 = "p02_markdown:app"
 rag-p03 = "p03_parse:app"
 rag-p04 = "p04_chunk:app"
+rag-p04b = "p04b_graph:app"
 rag-p05 = "p05_index:app"
 rag-p06 = "p06_query:app"
 rag-p07 = "p07_retrieve:app"
@@ -47,6 +48,8 @@ include = [
     "p02_markdown.py",
     "p03_parse.py",
     "p04_chunk.py",
+    "p04b_graph.py",
+    "chunkers.py",
     "p05_index.py",
     "p06_query.py",
     "p07_retrieve.py",

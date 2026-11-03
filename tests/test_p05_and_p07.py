@@ -172,7 +172,7 @@ def test_live_p05_index_and_p07_retrieve_end_to_end(tmp_path: Path) -> None:
         assert all(isinstance(i, int) for i in rec.sparse_indices)
         assert all(isinstance(v, float) for v in rec.sparse_values)
 
-    # 2. Construct Phase 06 Query Plan output referencing Phase 05 index_snapshot
+    # 2. Construct Phase 06 Query Plan output carrying the Phase 05 qdrant_collection
     query_str = "How does Hybrid RAG fuse dense and sparse vectors using Reciprocal Rank Fusion?"
     p06_payload = rc.Phase06QueryPlanOutput(
         run_id=out05_disk.run_id,
@@ -189,7 +189,7 @@ def test_live_p05_index_and_p07_retrieve_end_to_end(tmp_path: Path) -> None:
             "threshold verification."
         ),
         metadata_filters={"status": "production_verified"},
-        index_snapshot=out05_disk,
+        qdrant_collection=out05_disk.qdrant_collection,
     )
     f06.write_text(p06_payload.model_dump_json(indent=2), encoding="utf-8")
 

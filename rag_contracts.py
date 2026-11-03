@@ -93,6 +93,7 @@ class DocumentChunk(BaseModel):
 class Phase04ChunkedOutput(BasePhasePayload):
     phase_name: str = "04_chunking"
     chunks: list[DocumentChunk]
+    chunk_strategy: str = "sliding_window"
 
 
 class EnrichedIndexedChunk(BaseModel):
@@ -121,7 +122,7 @@ class Phase06QueryPlanOutput(BasePhasePayload):
     sub_queries: list[str]
     hyde_passage: str
     metadata_filters: dict[str, Any]
-    index_snapshot: Phase05IndexedOutput
+    qdrant_collection: str
 
 
 class RetrievedCandidate(BaseModel):
@@ -270,3 +271,25 @@ class PhaseCLI(Generic[T_In, T_Out]):
         # 3. Stream pure JSON to stdout for the next CLI phase
         sys.stdout.write(json_str + "\n")
         sys.stdout.flush()
+
+
+# --- GRAPHRAG SIDE ARTIFACT (Phase 4b) ---
+class GraphNode(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    entity: str
+    chunk_ids: list[str]
+
+
+class GraphEdge(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    source: str
+    target: str
+    weight: int
+    chunk_ids: list[str]
+
+
+class GraphArtifact(BasePhasePayload):
+    phase_name: str = "04b_graph"
+    extractor: str
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]

@@ -26,7 +26,7 @@ scripts = [
     "rag_contracts.py", "hybrid_engine.py", "p00_crag_orchestrator.py",
     "p01_load.py", "p02_markdown.py", "p03_parse.py", "p04_chunk.py",
     "p05_index.py", "p06_query.py", "p07_retrieve.py", "p08_rerank.py",
-    "p09_generate.py", "p10_evaluate.py"
+    "p09_generate.py", "p10_evaluate.py", "chunkers.py", "p04b_graph.py"
 ]
 
 # 1. AST & Bare print() stdout pollution check
@@ -39,12 +39,12 @@ for s in scripts:
             sys.exit(f"[AUDIT FAIL] Bare print() detected in {s}:{node.lineno} (corrupts stdout JSON pipe)")
 
 # 2. Verify Type-Chain Continuity across Phases 01 -> 10
-import p01_load, p02_markdown, p03_parse, p04_chunk, p05_index
+import p01_load, p02_markdown, p03_parse, p04_chunk, p04b_graph, p05_index
 import p06_query, p07_retrieve, p08_rerank, p09_generate, p10_evaluate
 
 chain = [
     p01_load.cli_engine, p02_markdown.cli_engine, p03_parse.cli_engine,
-    p04_chunk.cli_engine, p05_index.cli_engine, p06_query.cli_engine,
+    p04_chunk.cli_engine, p04b_graph.cli_engine, p05_index.cli_engine, p06_query.cli_engine,
     p07_retrieve.cli_engine, p08_rerank.cli_engine, p09_generate.cli_engine,
     p10_evaluate.cli_engine
 ]
@@ -113,6 +113,27 @@ validate_triplex_artifact "03" "artifacts/03_parsed.json" "Phase03ParsedOutput" 
 echo -e "${YELLOW}-> Exercising Phase 04 (rag-p04)...${RESET}"
 uv run rag-p04 --in-file artifacts/03_parsed.json --out-file artifacts/04_chunked.json --max-words 50 --overlap 10 > artifacts/stdout_04.json
 validate_triplex_artifact "04" "artifacts/04_chunked.json" "Phase04ChunkedOutput" "artifacts/stdout_04.json"
+
+# Phase 04 (recursive strategy): separate artifact so the canonical 04_chunked.json stays untouched
+echo -e "${YELLOW}-> Exercising Phase 04 --strategy recursive...${RESET}"
+uv run rag-p04 --in-file artifacts/03_parsed.json --out-file artifacts/04_chunked_recursive.json --strategy recursive > artifacts/stdout_04_recursive.json 2> artifacts/stderr_04_recursive.txt
+validate_triplex_artifact "04-recursive" "artifacts/04_chunked_recursive.json" "Phase04ChunkedOutput" "artifacts/stdout_04_recursive.json"
+
+# Phase 04b: pass-through graph stage (stdout == its Phase 04 input)
+echo -e "${YELLOW}-> Exercising Phase 04b (rag-p04b: entity graph side-artifact)...${RESET}"
+uv run rag-p04b --in-file artifacts/04_chunked.json --out-file artifacts/04b_passthrough.json --graph-file artifacts/04b_graph.json > artifacts/stdout_04b.json 2> artifacts/stderr_04b.txt
+validate_triplex_artifact "04b" "artifacts/04b_passthrough.json" "Phase04ChunkedOutput" "artifacts/stdout_04b.json"
+validate_triplex_artifact "04b-graph" "artifacts/04b_graph.json" "GraphArtifact" "artifacts/04b_graph.json"
+
+# Phase 04 negative: unknown strategy must exit 2 with the known names on stderr and empty stdout
+echo -e "${YELLOW}-> Negative test: rag-p04 --strategy nope (PASS = exit 2 + 'Known:')...${RESET}"
+neg_code=0
+uv run rag-p04 --strategy nope --in-file artifacts/03_parsed.json --out-file artifacts/_neg.json > artifacts/stdout_neg.json 2> artifacts/stderr_neg.txt || neg_code=$?
+if [[ "$neg_code" -ne 2 ]] || ! grep -q "Known:" artifacts/stderr_neg.txt || [[ -s artifacts/stdout_neg.json ]]; then
+    echo -e "${RED}[FAIL] Negative strategy test: exit=${neg_code}${RESET}" >&2
+    exit 1
+fi
+echo -e "  ${GREEN}[OK] Negative strategy test: exit 2, stderr lists known strategies, stdout empty${RESET}"
 
 # Phase 05: Live Jina-v3 + SPLADE Hybrid Qdrant Indexing
 echo -e "${YELLOW}-> Exercising Phase 05 (rag-p05: Jina-v3 + SPLADE + Qdrant Upsert)...${RESET}"
