@@ -442,7 +442,7 @@ flowchart TD
 3. `sub_queries = [q.strip() for q in query.replace(" and ", " | ").split("|") if q.strip()]` (falls back to `[query]`).
 4. `route = "hybrid_rag_multi_query"`.
 5. `hyde_passage = f"Technical specification answering '{query}': Hybrid RAG combines Qdrant HNSW dense embeddings with SPLADE sparse vectors via Reciprocal Rank Fusion (RRF) and verifies relevance via CRAG."`.
-6. `output = Phase06QueryPlanOutput(run_id=upstream.run_id, original_query=query, route=route, sub_queries=sub_queries, hyde_passage=hyde_passage, metadata_filters={"collection": upstream.qdrant_collection}, index_snapshot=upstream)`.
+6. `output = Phase06QueryPlanOutput(run_id=upstream.run_id, original_query=query, route=route, sub_queries=sub_queries, hyde_passage=hyde_passage, metadata_filters={"collection": upstream.qdrant_collection}, qdrant_collection=upstream.qdrant_collection)`. (Since 0.2.0: the full P05 payload is no longer embedded; only the collection name crosses to P07, the chunks reach P07 through Qdrant.)
 7. `cli_engine.emit(output, out_file, quiet)`.
 
 ### 7. Phase Input & Output Audit
@@ -456,7 +456,7 @@ flowchart TD
   - `sub_queries`: `list[str]`
   - `hyde_passage`: `str`
   - `metadata_filters`: `dict[str, Any]`
-  - `index_snapshot`: Full `Phase05IndexedOutput` payload.
+  - `qdrant_collection`: `str` (replaced `index_snapshot: Phase05IndexedOutput` in 0.2.0; legacy artifacts carrying `index_snapshot` are rejected with `extra_forbidden`).
 
 ---
 

@@ -37,6 +37,13 @@ Deliver a production-grade, 10-phase UNIX-piped Hybrid RAG CLI toolsuite with an
   - Codebase re-indexed in `jcodemunch` (138 symbols across 22 files).
   - Pushed to `origin/main` at commit `14e36ef`.
 
+- **Wave 8: Minimal Pluggability 0.2.0 (2026-11-02/03, PR #3 + PR #4):**
+  - Audited and rejected the Blackboard-envelope/async-plugin proposal (`docs/rag_plugin_evolution_architecture.md`); adopted "the pipe is the plugin bus" (`docs/plans/2026-11-02-plugin-evolution-audit.md`, `docs/plans/2026-11-02-minimal-pluggability-plan.md`, three Opus plan reviews).
+  - Delivered: `chunkers.py` registry + `rag-p04 --strategy`, `Phase06QueryPlanOutput.qdrant_collection`, `rag-p04b` GraphRAG side-artifact stage, batteries extended, `docs/MASTER_MANUAL.md`, version 0.2.0 + `changeset.md`.
+  - Verified: 30 tests, `verify_pipeline.ps1` Stages 0-3, `verify_pipeline.sh` Stages 0-3 under WSL Ubuntu-24.04 (parity YES), live-QA with negatives; kb run ledger.
+  - Battery hardening branch `fix/battery-hardening` (every phase exit checked, `.sh` `Usage()`/switches, convergence assertion) stacked on PR #4.
+- **Deferred by plan (YAGNI, recorded):** entry-point discovery for third-party chunkers; LLM contextual-prefix chunker; P07 one-hop graph expansion; late chunking; ColBERT slot; Qdrant `FormulaQuery`.
+
 ### Non-Goals
 - External server daemon requirement for baseline CLI operations (embedded Qdrant engine operates out-of-the-box).
 - Ad-hoc unstructured stdout logging (strictly forbidden; stdout is reserved for JSON output).
