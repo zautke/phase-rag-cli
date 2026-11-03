@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import math
+import os
 import uuid
+from pathlib import Path
 from typing import Any, Literal
 
 from fastembed import SparseTextEmbedding, TextEmbedding
@@ -51,7 +53,7 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
         return _dense_model, _dense_backend
 
     try:
-        _dense_model = TextEmbedding(model_name=DENSE_MODEL_NAME)
+        _dense_model = TextEmbedding(model_name=DENSE_MODEL_NAME, cache_dir=fastembed_cache_dir())
         _dense_backend = "fastembed"
     except (ValueError, RuntimeError):
         from sentence_transformers import SentenceTransformer
@@ -65,10 +67,18 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
     return _dense_model, _dense_backend
 
 
+def fastembed_cache_dir() -> str:
+    """Persistent fastembed model cache (default is the system temp dir, which gets wiped)."""
+    raw = os.environ.get("RAG_FASTEMBED_CACHE_DIR") or str(Path.home() / ".cache" / "fastembed")
+    path = Path(raw).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 def get_sparse_embedder() -> SparseTextEmbedding:
     global _sparse_model
     if _sparse_model is None:
-        _sparse_model = SparseTextEmbedding(model_name=SPARSE_MODEL_NAME)
+        _sparse_model = SparseTextEmbedding(model_name=SPARSE_MODEL_NAME, cache_dir=fastembed_cache_dir())
     return _sparse_model
 
 
@@ -174,7 +184,7 @@ def rerank_passages_batch(
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         if _fe_reranker is None or _loaded_rerank_key != cache_key:
-            _fe_reranker = TextCrossEncoder(model_name=model_name)
+            _fe_reranker = TextCrossEncoder(model_name=model_name, cache_dir=fastembed_cache_dir())
             _loaded_rerank_key = cache_key
 
         raw_scores = list(_fe_reranker.rerank(query, passages, batch_size=batch_size))

@@ -54,7 +54,7 @@ uv sync --all-extras
 set -o pipefail
 uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04 -s recursive | uv run rag-p04b | uv run rag-p05 | uv run rag-p06 -q "your question" | uv run rag-p07 | uv run rag-p08 | uv run rag-p09 | uv run rag-p10
 ```
-Re-run from any persisted artifact: `uv run rag-p07 -i artifacts/06_query_plan.json | uv run rag-p08 | uv run rag-p09`. First run downloads Jina-v3 (~2.3 GB, HuggingFace cache), SPLADE++ and the reranker. `artifacts/05_indexed.json` carries full 1024-d vectors per chunk and is large. Qdrant is embedded at `./qdrant_storage` (no server); set `QDRANT_URL` or `--qdrant-url` for a server, an unreachable URL falls back to embedded. On Windows PowerShell 5.1 or pwsh < 7.4, pipes re-encode text; use the `subprocess.Popen` chain in `verify_pipeline.ps1` Stage 2.
+fastembed models cache in `RAG_FASTEMBED_CACHE_DIR` (default `~/.cache/fastembed`); run with `uv run --env-file .env …` or export the variable. Re-run from any persisted artifact: `uv run rag-p07 -i artifacts/06_query_plan.json | uv run rag-p08 | uv run rag-p09`. First run downloads Jina-v3 (~2.3 GB, HuggingFace cache), SPLADE++ and the reranker. `artifacts/05_indexed.json` carries full 1024-d vectors per chunk and is large. Qdrant is embedded at `./qdrant_storage` (no server); set `QDRANT_URL` or `--qdrant-url` for a server, an unreachable URL falls back to embedded. On Windows PowerShell 5.1 or pwsh < 7.4, pipes re-encode text; use the `subprocess.Popen` chain in `verify_pipeline.ps1` Stage 2.
 
 ---
 
@@ -134,6 +134,7 @@ Constants: `DENSE_MODEL_NAME="jinaai/jina-embeddings-v3"` (1024-d), `SPARSE_MODE
 | Function | Behavior |
 |---|---|
 | `get_dense_embedder() -> (model, "sentence_transformers" \| "fastembed")` | lazy singleton; Jina-v3 loads via SentenceTransformer (`trust_remote_code=True`); other names try fastembed first |
+| `fastembed_cache_dir() -> str` | `RAG_FASTEMBED_CACHE_DIR` (``~`` expanded) or `~/.cache/fastembed`, created if missing; passed as `cache_dir=` to every fastembed model (SPLADE, ONNX reranker, fastembed dense fallback). Without it fastembed caches in the system temp dir and re-downloads after a wipe. No dotenv: use `uv run --env-file .env …` or export the variable |
 | `get_sparse_embedder() -> SparseTextEmbedding` | lazy singleton SPLADE++ (fastembed ONNX) |
 | `embed_dense_batch(texts) -> list[list[float]]` | whole-corpus batch |
 | `embed_sparse_batch(texts) -> list[tuple[list[int], list[float]]]` | whole-corpus batch |

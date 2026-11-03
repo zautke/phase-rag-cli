@@ -100,6 +100,8 @@ uv sync --all-extras
 cp .env.example .env
 ```
 
+fastembed models (SPLADE++, the ONNX reranker) are cached in `RAG_FASTEMBED_CACHE_DIR` (default `~/.cache/fastembed`), not the system temp dir, so they survive reboots and tmpfs wipes. Run with `uv run --env-file .env ...` or export the variable.
+
 ---
 
 ## Phase-by-Phase Reference (Phases 01–10 & P00)

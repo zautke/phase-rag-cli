@@ -503,3 +503,16 @@ def test_p00_forwards_p07_p08_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert a07[a07.index("--top-k") + 1] == "4"
     assert a08[a08.index("--top-n") + 1] == "2"
     assert a08[a08.index("--batch-size") + 1] == "8"
+
+
+def test_fastembed_cache_dir_env_expands_and_creates(tmp_path, monkeypatch):
+    import hybrid_engine
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("RAG_FASTEMBED_CACHE_DIR", "~/fe_cache")
+    got = hybrid_engine.fastembed_cache_dir()
+    assert got == str(tmp_path / "fe_cache")
+    assert (tmp_path / "fe_cache").is_dir()
+    monkeypatch.delenv("RAG_FASTEMBED_CACHE_DIR")
+    assert hybrid_engine.fastembed_cache_dir() == str(tmp_path / ".cache" / "fastembed")
