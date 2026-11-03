@@ -13,7 +13,7 @@ A modular, production-grade 10-phase UNIX-piped Hybrid Retrieval-Augmented Gener
   - [Phase 01: Document Loading (`rag-p01`)](#phase-01-document-loading-rag-p01)
   - [Phase 02: Markdown Normalization (`rag-p02`)](#phase-02-markdown-normalization-rag-p02)
   - [Phase 03: Structural AST Parsing (`rag-p03`)](#phase-03-structural-ast-parsing-rag-p03)
-  - [Phase 04: Semantic Sliding-Window Chunking (`rag-p04`)](#phase-04-semantic-sliding-window-chunking-rag-p04)
+  - [Phase 04: Semantic Chunking (`rag-p04`)](#phase-04-semantic-chunking-rag-p04)
   - [Phase 05: Hybrid Qdrant Indexing (`rag-p05`)](#phase-05-hybrid-qdrant-indexing-rag-p05)
   - [Phase 06: Query Decomposition & HyDE Plan (`rag-p06`)](#phase-06-query-decomposition--hyde-plan-rag-p06)
   - [Phase 07: Hybrid Prefetch + RRF Retrieval (`rag-p07`)](#phase-07-hybrid-prefetch--rrf-retrieval-rag-p07)
@@ -62,7 +62,7 @@ flowchart TD
     subgraph Ingestion["Ingestion Pipeline (Phases 01-05)"]
         P01["rag-p01: Load Raw Documents"] --> P02["rag-p02: Normalize Markdown"]
         P02 --> P03["rag-p03: AST Header Hierarchy Parse"]
-        P03 --> P04["rag-p04: Sliding Window Word Chunking"]
+        P03 --> P04["rag-p04: Word Chunking (--strategy)"]
         P04 --> P05["rag-p05: Jina-v3 Dense + SPLADE Sparse -> Qdrant"]
     end
 
@@ -149,7 +149,7 @@ cp .env.example .env
 
 ---
 
-### Phase 04: Semantic Sliding-Window Chunking (`rag-p04`)
+### Phase 04: Semantic Chunking (`rag-p04`)
 - **CLI Command:** `uv run rag-p04` (or `python p04_chunk.py`)
 - **Input Contract:** `Phase03ParsedOutput`
 - **Output Contract:** `Phase04ChunkedOutput` (`artifacts/04_chunked.json`)
@@ -159,7 +159,7 @@ cp .env.example .env
   - `-m`, `--max-words`: Chunk size in words (default: `60`, minimum `1`).
   - `-v`, `--overlap`: Word overlap between adjacent chunks (default: `12`; ignored by `recursive`).
   - `-s`, `--strategy`: Chunker name, `sliding_window` (default) or `recursive` (paragraph, then sentence, then word window). Unknown names exit 2 with the known names on stderr. See [Pluggability](#pluggability).
-- **Functionality:** Performs deterministic token-sliding window chunking while preserving the full section `parent_markdown` reference for contextual expansion.
+- **Functionality:** Performs deterministic word chunking with a pluggable strategy (`sliding_window` default, or `recursive`) while preserving the full section `parent_markdown` reference for contextual expansion.
 - **Example:**
   ```powershell
   uv run rag-p04 -i artifacts/03_parsed.json -o artifacts/04_chunked.json --max-words 50 --overlap 10
@@ -317,10 +317,10 @@ Every phase reads one strict JSON contract on stdin and writes the next on stdou
 
 - **Chunking strategy.** `rag-p04 --strategy NAME` picks a chunker from the registry in `chunkers.py` (`sliding_window`, `recursive`). The chosen name is recorded in `Phase04ChunkedOutput.chunk_strategy`. Artifacts written before this field existed still validate (default `sliding_window`). To add a chunker, write a `(section, max_words, overlap) -> list[DocumentChunk]` function and register it in `CHUNKERS`. Chunk ids must be unique per section, because they derive the Qdrant point ids.
 - **External stage drop-in via pipe.** Any program that reads `Phase04ChunkedOutput` JSON on stdin and writes the same schema on stdout can sit between `rag-p04` and `rag-p05`. Nothing else changes.
-- **Pass-through stage pattern.** `rag-p04b` takes `Phase04ChunkedOutput` and emits it unchanged (stdout is byte-identical to its input, so `chunk_strategy` and `run_id` survive). As a side effect it writes `artifacts/04b_graph.json`, an entity co-occurrence graph (`GraphArtifact`: nodes, weighted edges, chunk ids) built with a heuristic extractor. Use this pattern for any stage that observes the stream and produces a side artifact.
+- **Pass-through stage pattern.** `rag-p04b` takes `Phase04ChunkedOutput` and emits it unchanged (it re-emits the validated payload unchanged, byte-identical when the input came from a `rag-p*` stage, so `chunk_strategy` and `run_id` survive). As a side effect it writes `artifacts/04b_graph.json`, an entity co-occurrence graph (`GraphArtifact`: nodes, weighted edges, chunk ids) built with a heuristic extractor. Use this pattern for any stage that observes the stream and produces a side artifact.
 
   ```powershell
-  uv run rag-p04 | uv run rag-p04b -g artifacts/04b_graph.json | uv run rag-p05
+  uv run rag-p04 -i artifacts/03_parsed.json -s recursive | uv run rag-p04b -g artifacts/04b_graph.json | uv run rag-p05
   ```
 - **Deferred.** Nothing reads `04b_graph.json` yet. Graph-based one-hop expansion in `rag-p07` is intentionally not built.
 - **Contract change.** `Phase06QueryPlanOutput` carries `qdrant_collection` instead of the full P05 payload, so P06 output no longer embeds indexed records. Older 06/07 artifacts with `index_snapshot` are rejected; regenerate them.
@@ -400,7 +400,7 @@ uv run rag-p02 -i artifacts/readme_run/01_loaded.json -o artifacts/readme_run/02
 # 4. Phase 03: Structural AST Header hierarchy parsing
 uv run rag-p03 -i artifacts/readme_run/02_markdown.json -o artifacts/readme_run/03_parsed.json
 
-# 5. Phase 04: Semantic sliding-window chunking
+# 5. Phase 04: Semantic chunking (sliding-window by default)
 uv run rag-p04 -i artifacts/readme_run/03_parsed.json -o artifacts/readme_run/04_chunked.json --max-words 80 --overlap 15
 
 # 6. Phase 05: Dense (Jina-v3) + Sparse (SPLADE) indexing into Qdrant

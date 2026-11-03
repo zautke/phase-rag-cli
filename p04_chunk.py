@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from chunkers import resolve_chunker
+from chunkers import CHUNKERS, resolve_chunker
 from rag_contracts import (
     Phase03ParsedOutput,
     Phase04ChunkedOutput,
@@ -49,7 +49,7 @@ def main(
     ] = 12,
     strategy: Annotated[
         str,
-        typer.Option("--strategy", "-s", help="Chunker name (sliding_window|recursive)"),
+        typer.Option("--strategy", "-s", help=f"Chunker name ({'|'.join(sorted(CHUNKERS))})"),
     ] = "sliding_window",
     quiet: Annotated[
         bool,

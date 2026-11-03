@@ -28,7 +28,7 @@ cli_engine = PhaseCLI(
 )
 
 _ENTITY_RE = re.compile(r"\b[A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+)*\b")
-_STOP = {"The", "A", "An", "This", "It", "In", "On", "For", "And", "But"}
+_STOP = {"The", "An", "This", "It", "In", "On", "For", "And", "But"}
 
 
 def Usage() -> str:
