@@ -135,6 +135,7 @@ Constants: `DENSE_MODEL_NAME="jinaai/jina-embeddings-v3"` (1024-d), `SPARSE_MODE
 |---|---|
 | `get_dense_embedder() -> (model, "sentence_transformers" \| "fastembed")` | lazy singleton; Jina-v3 loads via SentenceTransformer (`trust_remote_code=True`); other names try fastembed first |
 | `fastembed_cache_dir() -> str` | the expanded `RAG_FASTEMBED_CACHE_DIR` (created if missing), or `None` when unset (fastembed's own default, no behavior change); passed as `cache_dir=` to every fastembed model (SPLADE, ONNX reranker, fastembed dense fallback). Unset, fastembed caches in the system temp dir and re-downloads after a wipe. No dotenv: use `uv run --env-file .env …` or export the variable |
+| `ensure_model(repo_id, cache_dir=None, include=("*",), exclude=()) -> Path` (`model_fetch.py`) | aria2c-fetches every matching repo file (`.bin` dropped when `.safetensors` exists) into `<cache>/models--org--name/snapshots/<sha>/`, writes `refs/main`, announces repo/files/size and streams aria2c progress to stderr, verifies sizes; skips files already present; falls back to the cached snapshot when the hub is unreachable or `HF_HUB_OFFLINE` is set. `prefetch_st` (sentence-transformers repo + remote-code repos named in `config.json` `auto_map`) and `prefetch_fastembed` (fastembed's `model_file`, `additional_files` and tokenizer/config files into fastembed's cache) call it before every model load |
 | `get_sparse_embedder() -> SparseTextEmbedding` | lazy singleton SPLADE++ (fastembed ONNX) |
 | `embed_dense_batch(texts) -> list[list[float]]` | whole-corpus batch |
 | `embed_sparse_batch(texts) -> list[tuple[list[int], list[float]]]` | whole-corpus batch |
@@ -252,7 +253,7 @@ Give it a default (`Field(default_factory=list)` for mutables); the default must
 3. The newest `artifacts/NN_*.json` is the last good output. Re-run the next phase alone: `uv run rag-pNN -i artifacts/<prev>.json` (if `-i` points at a nonexistent file the phase silently reads stdin; with a TTY that is exit 2 "Expected upstream JSON").
 4. Exit 2 with `Known:` on stderr is an unknown `--strategy`/`--extractor`; stdout is empty by design.
 5. Validation errors name the field and `extra_forbidden`/`missing`; compare against §4.4.
-6. `rag-p05`/`rag-p08` exit 1 with `RuntimeError: Task error: File reconstruction error: CAS Client Error … error decoding response body`: a HuggingFace Xet download failed while fastembed re-fetched a model (typical after a Linux/WSL `/tmp` wipe). Set `HF_HUB_DISABLE_XET=1` (plain HTTP fallback) and `RAG_FASTEMBED_CACHE_DIR` to a persistent dir, then re-run. Both batteries write a full transcript to `artifacts/verify_<ps1|sh>_<timestamp>.log`.
+6. `rag-p05`/`rag-p08` exit 1 with `RuntimeError: Task error: File reconstruction error: CAS Client Error … error decoding response body`: a HuggingFace Xet download failed while fastembed re-fetched a model (typical after a Linux/WSL `/tmp` wipe). Fixed in 0.2.0: models are now fetched by aria2c (`model_fetch.py`), which resumes and retries; install aria2c and set `RAG_FASTEMBED_CACHE_DIR` to a persistent dir. `HF_HUB_DISABLE_XET=1` remains a harmless guard. Both batteries write a full transcript to `artifacts/verify_<ps1|sh>_<timestamp>.log`.
 
 ---
 

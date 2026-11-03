@@ -102,6 +102,8 @@ cp .env.example .env
 
 fastembed models (SPLADE++, the ONNX reranker) cache in the system temp dir by default, which Linux/WSL wipes on restart. Set `RAG_FASTEMBED_CACHE_DIR` (for example `~/.cache/fastembed`) to keep them; unset keeps fastembed's default. Run with `uv run --env-file .env ...` or export the variable.
 
+Model downloads need **aria2c** on PATH (`winget install aria2.aria2` / `sudo apt-get install -y aria2` / `brew install aria2`). `model_fetch.ensure_model` fetches every model file with aria2c (8 connections, resumable, 10 retries) into the Hugging Face cache layout before a model loads, and prints the repo, each file, live progress and a done line to stderr; the libraries then load from cache and download nothing themselves. Without aria2c, the first phase that needs a missing model exits with `aria2c not found on PATH` and the install hint.
+
 ---
 
 ## Phase-by-Phase Reference (Phases 01–10 & P00)
@@ -495,7 +497,7 @@ pwsh -File .\verify_pipeline.ps1 [-s] [-q]
 ```powershell
 wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=`$HOME/.local/bin:`$PATH UV_PROJECT_ENVIRONMENT=`$HOME/.venvs/phase-rag RAG_FASTEMBED_CACHE_DIR=`$HOME/.cache/fastembed HF_HUB_DISABLE_XET=1; cd /mnt/c/<path-to-repo> && uv sync --all-extras && ./verify_pipeline.sh -s"
 ```
-Use `--exec` (plain `--` fails on a Windows PATH containing `(x86)`), a Linux `UV_PROJECT_ENVIRONMENT` (the Windows `.venv` is unusable from Linux), a persistent `RAG_FASTEMBED_CACHE_DIR` (WSL wipes `/tmp`), and `HF_HUB_DISABLE_XET=1` if HuggingFace Xet downloads fail with "error decoding response body".
+Use `--exec` (plain `--` fails on a Windows PATH containing `(x86)`), a Linux `UV_PROJECT_ENVIRONMENT` (the Windows `.venv` is unusable from Linux), a persistent `RAG_FASTEMBED_CACHE_DIR` (WSL wipes `/tmp`), aria2c installed in the distro (`sudo apt-get install -y aria2`), and `HF_HUB_DISABLE_XET=1` as a belt-and-braces guard (aria2c now does the model downloads, so the HuggingFace Xet path is not used).
 
 ### Verification Stages
 - **Stage 0:** UV sync & AST static review (verifies 0 stdout `print()` calls across all 13 scripts, strictly continuous type contracts across Phase 01–10, and explicit `client.close()` calls).

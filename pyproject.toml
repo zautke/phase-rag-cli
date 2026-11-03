@@ -50,6 +50,7 @@ include = [
     "p04_chunk.py",
     "p04b_graph.py",
     "chunkers.py",
+    "model_fetch.py",
     "p05_index.py",
     "p06_query.py",
     "p07_retrieve.py",
