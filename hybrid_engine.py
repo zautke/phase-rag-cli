@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import math
 import os
 import uuid
@@ -12,6 +13,8 @@ from typing import Any, Literal
 from fastembed import SparseTextEmbedding, TextEmbedding
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
+
+from model_fetch import ensure_model
 
 DENSE_MODEL_NAME = "jinaai/jina-embeddings-v3"
 SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
@@ -29,6 +32,37 @@ _sparse_model: SparseTextEmbedding | None = None
 _fe_reranker: Any = None
 _st_reranker: Any = None
 _loaded_rerank_key: str | None = None
+
+FASTEMBED_BASE_FILES = (
+    "config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "preprocessor_config.json",
+)
+ST_EXCLUDE = ("onnx/*", "openvino/*", "assets/*", "*.onnx", "*.onnx_data")
+
+
+def prefetch_st(model_name: str) -> None:
+    """aria2c-fetch a sentence-transformers repo plus any remote-code repo its config.json names."""
+    snap = ensure_model(model_name, exclude=ST_EXCLUDE)
+    config = snap / "config.json"
+    auto_map = json.loads(config.read_text(encoding="utf-8")).get("auto_map", {}) if config.is_file() else {}
+    for ref in {v for v in auto_map.values() if isinstance(v, str) and "--" in v}:
+        ensure_model(ref.split("--")[0], include=("*.py", "*.json"))
+
+
+def prefetch_fastembed(model_cls: Any, model_name: str) -> None:
+    """aria2c-fetch a fastembed model's files into fastembed's cache before it loads."""
+    from fastembed.common.utils import define_cache_dir
+
+    desc = next(
+        (d for d in model_cls.list_supported_models() if d["model"].lower() == model_name.lower()), None
+    )
+    hf = (desc or {}).get("sources", {}).get("hf")
+    if desc and hf:
+        files = (*FASTEMBED_BASE_FILES, desc["model_file"], *desc.get("additional_files", []))
+        ensure_model(hf, define_cache_dir(fastembed_cache_dir()), include=files)
 
 
 def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastembed"]]:
@@ -48,11 +82,13 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
 
         if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
             PreTrainedModel.all_tied_weights_keys = {}  # type: ignore[attr-defined]
+        prefetch_st(DENSE_MODEL_NAME)
         _dense_model = SentenceTransformer(DENSE_MODEL_NAME, trust_remote_code=True)
         _dense_backend = "sentence_transformers"
         return _dense_model, _dense_backend
 
     try:
+        prefetch_fastembed(TextEmbedding, DENSE_MODEL_NAME)
         _dense_model = TextEmbedding(model_name=DENSE_MODEL_NAME, cache_dir=fastembed_cache_dir())
         _dense_backend = "fastembed"
     except (ValueError, RuntimeError):
@@ -61,6 +97,7 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
 
         if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
             PreTrainedModel.all_tied_weights_keys = {}  # type: ignore[attr-defined]
+        prefetch_st(DENSE_MODEL_NAME)
         _dense_model = SentenceTransformer(DENSE_MODEL_NAME, trust_remote_code=True)
         _dense_backend = "sentence_transformers"
 
@@ -80,6 +117,7 @@ def fastembed_cache_dir() -> str | None:
 def get_sparse_embedder() -> SparseTextEmbedding:
     global _sparse_model
     if _sparse_model is None:
+        prefetch_fastembed(SparseTextEmbedding, SPARSE_MODEL_NAME)
         _sparse_model = SparseTextEmbedding(model_name=SPARSE_MODEL_NAME, cache_dir=fastembed_cache_dir())
     return _sparse_model
 
@@ -186,6 +224,7 @@ def rerank_passages_batch(
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         if _fe_reranker is None or _loaded_rerank_key != cache_key:
+            prefetch_fastembed(TextCrossEncoder, model_name)
             _fe_reranker = TextCrossEncoder(model_name=model_name, cache_dir=fastembed_cache_dir())
             _loaded_rerank_key = cache_key
 
@@ -199,6 +238,7 @@ def rerank_passages_batch(
     from sentence_transformers import CrossEncoder
 
     if _st_reranker is None or _loaded_rerank_key != cache_key:
+        prefetch_st(model_name)
         _st_reranker = CrossEncoder(
             model_name,
             trust_remote_code=True,
