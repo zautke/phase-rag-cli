@@ -46,7 +46,7 @@ Revision 2 (2026-11-02): incorporates three independent Opus plan reviews (execu
 **Interfaces:**
 - `chunkers.py`:
   - `Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]` (section, max_words, overlap)
-  - `def _windows(words: list[str], max_words: int, overlap: int) -> list[list[str]]` (step `max(1, max_words - overlap)`; identical slicing to the legacy loop at `p04_chunk.py:56-64`; empty `words` → `[]`)
+  - `def _windows(words: list[str], max_words: int, overlap: int) -> list[list[str]]` (step `max(1, max_words - overlap)`; identical slicing to the legacy loop at `p04_chunk.py:58-75`; empty `words` → `[]`)
   - `def _make_chunk(sec: ParsedSection, chunk_id: str, words: list[str]) -> DocumentChunk` with `token_count=len(words)`, `header_hierarchy=sec.header_path`, `parent_markdown=f"### {' > '.join(sec.header_path)}\n{sec.body}"`
   - `def chunk_sliding_window(sec, max_words, overlap) -> list[DocumentChunk]`: `chunk_id=f"{sec.section_id}_chk_{idx}"` (legacy parity, including the legacy quirk that an empty body yields zero chunks)
   - `def chunk_recursive(sec, max_words, overlap) -> list[DocumentChunk]`: split `sec.body` on `\n\n` (strip, drop empties); no packing of short paragraphs; a paragraph with more than `max_words` words is split on `(?<=[.!?])\s+`; a sentence with more than `max_words` words is split by `_windows(words, max_words, 0)`; ONE running counter across the whole section: `chunk_id=f"{sec.section_id}_rec_{n}"`; `overlap` ignored; empty/whitespace body → `[]`.
@@ -113,7 +113,7 @@ def test_phase06_payload_has_no_indexed_records():  # "indexed_records" not in p
 - `GraphNode(BaseModel)`: `entity: str`, `chunk_ids: list[str]`. `GraphEdge(BaseModel)`: `source: str`, `target: str`, `weight: int`, `chunk_ids: list[str]`. Both strict/forbid like the other item models.
 - `GraphArtifact(BasePhasePayload)`: `phase_name: str = "04b_graph"`, `extractor: str`, `nodes: list[GraphNode]`, `edges: list[GraphEdge]`; constructed with `run_id=upstream.run_id`.
 - `def extract_entities_heuristic(text: str) -> list[str]`: regex `\b[A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+)*\b`; drop matches in `{"The","A","An","This","It","In","On","For","And","But"}`; dedupe preserving order. `# ponytail: heuristic NER; upgrade = --extractor ollama|spacy`.
-- `def build_graph(chunks: list[DocumentChunk]) -> tuple[list[GraphNode], list[GraphEdge]]`: edges = unordered pairs co-occurring in a chunk; `weight` = number of chunks; `source < target` lexically; sorted by `-weight, source, target`.
+- `def build_graph(chunks: list[DocumentChunk], min_weight: int = 1) -> tuple[list[GraphNode], list[GraphEdge]]`: edges = unordered pairs co-occurring in a chunk; `weight` = number of chunks; edges with `weight < min_weight` dropped; `source < target` lexically; sorted by `-weight, source, target`.
 - CLI options: `--in-file/-i`, `--out-file/-o` (default `artifacts/04b_passthrough.json`), `--graph-file/-g` (default `artifacts/04b_graph.json`), `--extractor/-e` (`heuristic`; any other value → `typer.BadParameter`), `--min-weight/-w` (default 1, drop edges below), `--quiet/-q`.
 - `cli_engine = PhaseCLI("Phase 04b: Entity Graph (pass-through)", Phase04ChunkedOutput, Phase04ChunkedOutput, "artifacts/04b_passthrough.json")`. `main`: `upstream = cli_engine.load_upstream(in_file)`; build graph; `graph_file.write_text(GraphArtifact(...).model_dump_json(indent=2), encoding="utf-8")`; second Rich panel on stderr (node/edge counts, top-5 entities) unless quiet; **`cli_engine.emit(upstream, out_file, quiet)`** (pass the upstream object itself; never rebuild it, so `chunk_strategy`, `run_id`, `timestamp` survive and stdout is byte-identical).
 - Consumer of `04b_graph.json`: none yet (P07 one-hop expansion deferred, YAGNI). README states this.
@@ -129,7 +129,7 @@ def test_p04b_passthrough_byte_identical(tmp_path):
 def test_p04b_zero_entities_still_passes_through(tmp_path):  # lowercase-only corpus -> nodes == [] and edges == [], exit 0
 ```
 
-- [ ] **Step 2:** FAIL. **Step 3:** implement (~90 LOC). **Step 4:** `uv run pytest -q` → 30 pass; ruff clean; smoke: `uv run rag-p03 -i artifacts/02_markdown.json | uv run rag-p04 | uv run rag-p04b | uv run rag-p05 -q` exit 0.
+- [ ] **Step 2:** FAIL. **Step 3:** implement (~90 LOC). **Step 4:** `uv run pytest -q` → 30 pass; ruff clean; smoke (fresh worktree has no artifacts, so start at P01; use a Python `subprocess.Popen` chain as in `verify_pipeline.ps1` Stage 2, not a native PowerShell pipe): `rag-p01 | rag-p02 | rag-p03 | rag-p04 | rag-p04b | rag-p05 -q` exit 0.
 - [ ] **Step 5: Commit** `feat(p04b): GraphRAG entity co-occurrence side-artifact stage`
 
 ### Task 4: Verification batteries + docs + version
@@ -143,7 +143,7 @@ def test_p04b_zero_entities_still_passes_through(tmp_path):  # lowercase-only co
 - Modify: `docs/continuity/CURRENT_TASK_STATE.md`, `docs/continuity/PLANS.md`.
 - Final commit only: `pyproject.toml:7` `version = "0.2.0"`; create `changeset.md` with a `## 0.2.0` entry listing Tasks 1-3.
 
-- [ ] **Step 1:** Edit both scripts (keep the `Start-Process … -RedirectStandardOutput/-RedirectStandardError` pattern; add `$proc.ExitCode` checks to the new steps).
+- [ ] **Step 1:** Edit both scripts. Existing `.ps1:165` redirects stdout only and never checks exit codes; new steps add `-RedirectStandardError`, cache `$null = $proc.Handle` before `WaitForExit()` (otherwise `$proc.ExitCode` can be `$null`), and assert `$proc.ExitCode`.
 - [ ] **Step 2:** `pwsh -File verify_pipeline.ps1` → Stages 0-3 PASS with the new sub-steps visible.
 - [ ] **Step 3: Commit** `test(verify): rag-p04 --strategy recursive, rag-p04b and negative strategy test in batteries`
 - [ ] **Step 4:** README + continuity → commit `docs: pluggability section and continuity update`.
@@ -176,5 +176,5 @@ Metrics registry (binding directive; recorded every later run): `chunk_count_sli
 ## Self-review
 
 - Spec coverage: audit items 1 (constraint), 2 (Task 1), 3 (README, Task 4), 4 (Task 2), 5 (Task 3), 6 (cut: already in Stage 0), 7 (deferred).
-- Type consistency: `Chunker` signature used identically in Task 1 and `p04.main`; `qdrant_collection: str` in Tasks 2 and 3 smoke; `GraphArtifact.run_id` sourced from `upstream.run_id`; `cli_engine` attribute present in all 11 phase modules (verified) and required in `p04b_graph.py` for the Stage 0 chain import.
+- Type consistency: `Chunker` signature used identically in Task 1 and `p04.main`; `qdrant_collection: str` read only in Task 2 (`p06`, `p07`, test); `GraphArtifact.run_id` sourced from `upstream.run_id`; `cli_engine` attribute present in all 11 phase modules (verified) and required in `p04b_graph.py` for the Stage 0 chain import.
 - Test counts: 17 → 24 → 26 → 30.
