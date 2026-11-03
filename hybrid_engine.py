@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import math
+import os
 import uuid
+from pathlib import Path
 from typing import Any, Literal
 
 from fastembed import SparseTextEmbedding, TextEmbedding
@@ -51,7 +53,7 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
         return _dense_model, _dense_backend
 
     try:
-        _dense_model = TextEmbedding(model_name=DENSE_MODEL_NAME)
+        _dense_model = TextEmbedding(model_name=DENSE_MODEL_NAME, cache_dir=fastembed_cache_dir())
         _dense_backend = "fastembed"
     except (ValueError, RuntimeError):
         from sentence_transformers import SentenceTransformer
@@ -65,10 +67,20 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
     return _dense_model, _dense_backend
 
 
+def fastembed_cache_dir() -> str | None:
+    """Opt-in persistent fastembed cache; None keeps fastembed's own default (system temp dir)."""
+    raw = os.environ.get("RAG_FASTEMBED_CACHE_DIR")
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 def get_sparse_embedder() -> SparseTextEmbedding:
     global _sparse_model
     if _sparse_model is None:
-        _sparse_model = SparseTextEmbedding(model_name=SPARSE_MODEL_NAME)
+        _sparse_model = SparseTextEmbedding(model_name=SPARSE_MODEL_NAME, cache_dir=fastembed_cache_dir())
     return _sparse_model
 
 
@@ -144,6 +156,13 @@ def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, x))))
 
 
+def resolve_rerank_model(model_name: str, backend: str) -> str:
+    """fastembed cannot serve the default torch model; swap in its ONNX default."""
+    if backend == "fastembed" and model_name == DEFAULT_RERANK_MODEL:
+        return DEFAULT_FASTEMBED_RERANK_MODEL
+    return model_name
+
+
 def rerank_passages_batch(
     query: str,
     passages: list[str],
@@ -159,6 +178,7 @@ def rerank_passages_batch(
     if not passages:
         return []
 
+    model_name = resolve_rerank_model(model_name, backend)
     global _fe_reranker, _st_reranker, _loaded_rerank_key
     cache_key = f"{backend}:{model_name}"
 
@@ -166,7 +186,7 @@ def rerank_passages_batch(
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         if _fe_reranker is None or _loaded_rerank_key != cache_key:
-            _fe_reranker = TextCrossEncoder(model_name=model_name)
+            _fe_reranker = TextCrossEncoder(model_name=model_name, cache_dir=fastembed_cache_dir())
             _loaded_rerank_key = cache_key
 
         raw_scores = list(_fe_reranker.rerank(query, passages, batch_size=batch_size))

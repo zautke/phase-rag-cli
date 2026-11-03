@@ -41,7 +41,13 @@ def Usage() -> str:
 
 def extract_entities_heuristic(text: str) -> list[str]:
     # ponytail: heuristic NER; upgrade = --extractor ollama|spacy
-    found = [m for m in _ENTITY_RE.findall(text) if m not in _STOP]
+    found = []
+    for m in _ENTITY_RE.findall(text):
+        toks = m.split()
+        while toks and toks[0] in _STOP:
+            toks.pop(0)
+        if toks:
+            found.append(" ".join(toks))
     return list(dict.fromkeys(found))
 
 

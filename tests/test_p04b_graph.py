@@ -50,6 +50,11 @@ def test_extract_entities_heuristic_basic():
     assert extract_entities_heuristic(text) == ["Qdrant", "Jina-v3", "SPLADE"]
 
 
+def test_extract_entities_strips_leading_stopwords():
+    assert extract_entities_heuristic("The Qdrant fuses SPLADE.") == ["Qdrant", "SPLADE"]
+    assert extract_entities_heuristic("The. It And") == []
+
+
 def test_build_graph_cooccurrence_weight():
     chunks = [chunk("c1", "Qdrant uses SPLADE here."), chunk("c2", "SPLADE and Qdrant again.")]
     nodes, edges = build_graph(chunks)

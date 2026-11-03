@@ -8,12 +8,14 @@ import typer
 from hybrid_engine import (
     DEFAULT_RERANK_MODEL,
     rerank_passages_batch,
+    resolve_rerank_model,
 )
 from rag_contracts import (
     Phase07RetrievedOutput,
     Phase08RerankedOutput,
     PhaseCLI,
     RerankedContextItem,
+    err_console,
 )
 
 app = typer.Typer(add_completion=False)
@@ -77,7 +79,7 @@ def main(
         typer.Option(
             "--model",
             "-m",
-            help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual)",
+            help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual; with -b fastembed the torch default maps to jinaai/jina-reranker-v2-base-multilingual)",
         ),
     ] = DEFAULT_RERANK_MODEL,
     backend: Annotated[
@@ -145,11 +147,15 @@ def main(
 
     # 1. Batch score all (query, contextualized_text) candidate pairs through the live Cross-Encoder
     passages = [cand.contextualized_text for cand in candidates]
+    rerank_backend = "fastembed" if backend.lower() == "fastembed" else "transformers"
+    resolved_model = resolve_rerank_model(model_name, rerank_backend)
+    if not quiet:
+        err_console.print(f"[cyan]Reranker:[/cyan] {rerank_backend} / {resolved_model}")
     ce_scores = rerank_passages_batch(
         query=query,
         passages=passages,
-        model_name=model_name,
-        backend="fastembed" if backend.lower() == "fastembed" else "transformers",
+        model_name=resolved_model,
+        backend=rerank_backend,
         batch_size=batch_size,
     )
 

@@ -447,3 +447,72 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     assert (artifacts_dir / "09_generated.json").exists()
     assert (artifacts_dir / "10_evaluated.json").exists()
     assert f00.exists()
+
+
+def test_resolve_rerank_model_wires_fastembed_default() -> None:
+    from hybrid_engine import (
+        DEFAULT_FASTEMBED_RERANK_MODEL,
+        DEFAULT_RERANK_MODEL,
+        resolve_rerank_model,
+    )
+
+    assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "fastembed") == DEFAULT_FASTEMBED_RERANK_MODEL
+    assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "transformers") == DEFAULT_RERANK_MODEL
+    assert resolve_rerank_model("custom/model", "fastembed") == "custom/model"
+
+
+def test_p00_forwards_p07_p08_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    p05 = rc.Phase05IndexedOutput(run_id="r", qdrant_collection="c", indexed_records=[])
+    f05 = tmp_path / "05.json"
+    f05.write_text(p05.model_dump_json(), encoding="utf-8")
+    plan = rc.Phase06QueryPlanOutput(
+        run_id="r",
+        original_query="q",
+        route="hybrid_rag",
+        sub_queries=["q"],
+        hyde_passage="h",
+        metadata_filters={},
+        qdrant_collection="c",
+    )
+    p07 = rc.Phase07RetrievedOutput(run_id="r", query_plan=plan, candidates=[])
+    calls: dict[str, list[str]] = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake(script: str, input_json: str, args: list[str], quiet_child: bool) -> str:
+        calls[script] = args
+        if script == "p06_query.py":
+            return plan.model_dump_json()
+        if script == "p07_retrieve.py":
+            return p07.model_dump_json()
+        raise Stop
+
+    monkeypatch.setattr(p00_crag_orchestrator, "invoke_cli_phase", fake)
+    res = CliRunner().invoke(
+        p00_crag_orchestrator.app,
+        ["-i", str(f05), "-o", str(tmp_path / "00.json"), "-l", "7", "-k", "33", "-K", "4",
+         "-n", "2", "-B", "8", "-s"],
+    )
+    assert isinstance(res.exception, Stop)
+    a07, a08 = calls["p07_retrieve.py"], calls["p08_rerank.py"]
+    assert a07[a07.index("--prefetch-limit") + 1] == "7"
+    assert a07[a07.index("--rrf-k") + 1] == "33"
+    assert a07[a07.index("--top-k") + 1] == "4"
+    assert a08[a08.index("--top-n") + 1] == "2"
+    assert a08[a08.index("--batch-size") + 1] == "8"
+
+
+def test_fastembed_cache_dir_env_expands_and_creates(tmp_path, monkeypatch):
+    import hybrid_engine
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("RAG_FASTEMBED_CACHE_DIR", "~/fe_cache")
+    got = hybrid_engine.fastembed_cache_dir()
+    assert got == str(tmp_path / "fe_cache")
+    assert (tmp_path / "fe_cache").is_dir()
+    monkeypatch.delenv("RAG_FASTEMBED_CACHE_DIR")
+    assert hybrid_engine.fastembed_cache_dir() is None
