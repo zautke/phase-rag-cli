@@ -252,6 +252,7 @@ Give it a default (`Field(default_factory=list)` for mutables); the default must
 3. The newest `artifacts/NN_*.json` is the last good output. Re-run the next phase alone: `uv run rag-pNN -i artifacts/<prev>.json` (if `-i` points at a nonexistent file the phase silently reads stdin; with a TTY that is exit 2 "Expected upstream JSON").
 4. Exit 2 with `Known:` on stderr is an unknown `--strategy`/`--extractor`; stdout is empty by design.
 5. Validation errors name the field and `extra_forbidden`/`missing`; compare against §4.4.
+6. `rag-p05`/`rag-p08` exit 1 with `RuntimeError: Task error: File reconstruction error: CAS Client Error … error decoding response body`: a HuggingFace Xet download failed while fastembed re-fetched a model (typical after a Linux/WSL `/tmp` wipe). Set `HF_HUB_DISABLE_XET=1` (plain HTTP fallback) and `RAG_FASTEMBED_CACHE_DIR` to a persistent dir, then re-run. Both batteries write a full transcript to `artifacts/verify_<ps1|sh>_<timestamp>.log`.
 
 ---
 
@@ -261,8 +262,8 @@ Give it a default (`Field(default_factory=list)` for mutables); the default must
 |---|---|---|
 | Unit/integration | `uv run pytest -q` | all pass (one live Qdrant test, ~5 min) |
 | Lint | `uv run ruff check .` | clean (line-length 100, py311) |
-| Battery, Windows | `pwsh -File verify_pipeline.ps1 [-SkipSync/-s]` (a `-Quiet/-q` switch is declared but unused) | deletes `artifacts/` and `qdrant_storage/`, then Stage 0 static (AST no-`print()` audit over all phase modules + `chunkers.py` + `p04b_graph.py`; `client.close()` present in p05/p07; contract-chain identity incl. `p04b_graph`), Stage 1 isolated runs of every phase incl. `rag-p04 -s recursive` → `artifacts/04_chunked_recursive.json` and `rag-p04b`, plus the negative `rag-p04 -s nope` (exit 2, `Known:` on stderr, empty stdout), Stage 2 full 10-phase pipe (without p04b), Stage 3 `rag-p00 --crag-threshold 0.92 --max-retries 2` with the fastembed Jina reranker, schema-validated (no convergence assertion) |
-| Battery, bash | `verify_pipeline.sh` | identical stages; run on macOS/Linux (bash is banned on the Windows host) |
+| Battery, Windows | `pwsh -File verify_pipeline.ps1 [-SkipSync/-s] [-Quiet/-q] [-Help/-h]` | writes `artifacts/verify_ps1_<ts>.log`, deletes `artifacts/` and `qdrant_storage/`, then Stage 0 static (AST no-`print()` audit over all phase modules + `chunkers.py` + `p04b_graph.py`; `client.close()` present in p05/p07; contract-chain identity incl. `p04b_graph`), Stage 1 isolated runs of every phase through `Invoke-Phase` (every exit code checked, stderr tail on failure) incl. `rag-p04 -s recursive` → `artifacts/04_chunked_recursive.json` and `rag-p04b`, plus the negative `rag-p04 -s nope` (exit 2, `Known:` on stderr, empty stdout), Stage 2 full 10-phase pipe with every stage's exit checked (without p04b), Stage 3a `rag-p00 --crag-threshold 0.92 --max-retries 2` stress run (schema only) and 3b `rag-p00` at defaults asserting `converged == true` and `GROUNDED` |
+| Battery, bash | `./verify_pipeline.sh [-s/--skip-sync] [-q/--quiet] [-h/--help]` | identical stages (`run_phase` wrapper, `PIPESTATUS` on the pipe, `utf-8-sig` validator, transcript `artifacts/verify_sh_<ts>.log`); on the Windows host run it on real Linux via WSL: `wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=$HOME/.local/bin:$PATH UV_PROJECT_ENVIRONMENT=$HOME/.venvs/<name> RAG_FASTEMBED_CACHE_DIR=$HOME/.cache/fastembed HF_HUB_DISABLE_XET=1; cd /mnt/c/<path> && uv sync --all-extras && ./verify_pipeline.sh"` |
 
 Negative tests are first-class: PASS means exactly the declared failure occurred.
 

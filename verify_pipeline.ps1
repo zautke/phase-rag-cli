@@ -40,6 +40,12 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 [Console]::InputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 
+# Persist the whole battery transcript so evidence survives the session (twin of the .sh tee).
+New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
+$verifyLog = "artifacts/verify_ps1_$(Get-Date -Format yyyyMMddTHHmmss).log"
+Start-Transcript -Path $verifyLog -Append | Out-Null
+Write-Host "-> Transcript: $verifyLog" -ForegroundColor DarkGray
+
 Write-Host "================================================================================" -ForegroundColor Cyan
 Write-Host " STAGE 0: UV ENVIRONMENT SYNC & POST-IMPLEMENTATION STATIC REVIEW" -ForegroundColor White
 Write-Host "================================================================================" -ForegroundColor Cyan
@@ -340,3 +346,4 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "`n================================================================================" -ForegroundColor Green
 Write-Host " ALL STATIC REVIEWS, 10 ISOLATED PHASE TESTS, UNIX PIPE, & CRAG LOOP PASSED!" -ForegroundColor Green
 Write-Host "================================================================================" -ForegroundColor Green
+Stop-Transcript | Out-Null

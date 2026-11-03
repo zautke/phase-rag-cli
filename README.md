@@ -479,16 +479,23 @@ uv run rag-p10
 
 The repository includes a comprehensive 4-stage automated verification battery that exercises the static contracts, per-phase isolation, UNIX pipe integrity, and autonomous CRAG loopback convergence.
 
-### Running on Windows (PowerShell)
+Both batteries check every phase's exit code (stderr tail on failure), check all ten pipe stages, assert that `rag-p00` converges `GROUNDED` at its defaults, and write a full transcript to `artifacts/verify_<ps1|sh>_<timestamp>.log`. Switches: `-s/--skip-sync`, `-q/--quiet`, `-h/--help`.
+
+### Running on Windows (PowerShell 7+)
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\verify_pipeline.ps1
+pwsh -File .\verify_pipeline.ps1 [-s] [-q]
 ```
 
 ### Running on POSIX (Linux / macOS)
 ```bash
-chmod +x ./verify_pipeline.sh
-./verify_pipeline.sh
+./verify_pipeline.sh [-s] [-q]
 ```
+
+### Running the bash battery from Windows (WSL, real Linux)
+```powershell
+wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=`$HOME/.local/bin:`$PATH UV_PROJECT_ENVIRONMENT=`$HOME/.venvs/phase-rag RAG_FASTEMBED_CACHE_DIR=`$HOME/.cache/fastembed HF_HUB_DISABLE_XET=1; cd /mnt/c/<path-to-repo> && uv sync --all-extras && ./verify_pipeline.sh -s"
+```
+Use `--exec` (plain `--` fails on a Windows PATH containing `(x86)`), a Linux `UV_PROJECT_ENVIRONMENT` (the Windows `.venv` is unusable from Linux), a persistent `RAG_FASTEMBED_CACHE_DIR` (WSL wipes `/tmp`), and `HF_HUB_DISABLE_XET=1` if HuggingFace Xet downloads fail with "error decoding response body".
 
 ### Verification Stages
 - **Stage 0:** UV sync & AST static review (verifies 0 stdout `print()` calls across all 13 scripts, strictly continuous type contracts across Phase 01–10, and explicit `client.close()` calls).

@@ -40,6 +40,12 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# Persist the whole battery transcript so evidence survives the session (twin of the .ps1 transcript).
+mkdir -p artifacts
+VERIFY_LOG="artifacts/verify_sh_$(date -u +%Y%m%dT%H%M%S).log"
+exec > >(tee -a "$VERIFY_LOG") 2>&1
+echo -e "-> Transcript: ${VERIFY_LOG}"
+
 echo -e "${CYAN}================================================================================${RESET}"
 echo -e "${BOLD} STAGE 0: UV ENVIRONMENT SYNC & POST-IMPLEMENTATION STATIC REVIEW${RESET}"
 echo -e "${CYAN}================================================================================${RESET}"
