@@ -86,7 +86,7 @@ def main(
     ] = "heuristic",
     min_weight: Annotated[
         int,
-        typer.Option("--min-weight", "-w", help="Drop edges with fewer co-occurring chunks"),
+        typer.Option("--min-weight", "-w", min=1, help="Drop edges with fewer co-occurring chunks"),
     ] = 1,
     quiet: Annotated[
         bool,

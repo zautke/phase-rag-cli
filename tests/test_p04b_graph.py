@@ -66,7 +66,7 @@ def test_p04b_passthrough_byte_identical(tmp_path):
     graph = tmp_path / "g.json"
     proc = run(["p04b_graph.py", "-i", str(in04), "-o", str(tmp_path / "out.json"), "-g", str(graph), "-q"])
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.replace(b"\r\n", b"\n").rstrip(b"\n") == raw.rstrip(b"\n")
+    assert proc.stdout.replace(b"\r\n", b"\n") == raw.rstrip(b"\n") + b"\n"
     assert b'"chunk_strategy": "recursive"' in proc.stdout
     art = GraphArtifact.model_validate_json(graph.read_text(encoding="utf-8"))
     assert art.run_id == "r1"
