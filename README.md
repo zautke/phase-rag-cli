@@ -294,7 +294,9 @@ cp .env.example .env
   - `-i`, `--in-file`: Upstream indexed payload.
   - `-o`, `--out-file`: Output summary path (default: `artifacts/00_crag_loop_summary.json`).
   - `-t`, `--crag-threshold`: Confidence threshold (default: `0.65`).
-  - `-m`, `--max-retries`: Maximum query rewrite attempts (default: `2`).
+  - `-r`, `--max-retries`: Total CRAG attempts (default: `3`).
+  - `-l`, `--prefetch-limit` (25), `-k`, `--rrf-k` (60), `-K`, `--top-k` (10): forwarded to `rag-p07` on every attempt.
+  - `-n`, `--top-n` (5), `-B`, `--batch-size` (16): forwarded to `rag-p08` on every attempt.
   - `-c`, `--quiet-children`: Suppress child phase telemetry to keep stderr clean.
 - **Functionality:**
   1. Executes child pipeline phases `P06 -> P07 -> P08 -> P09` as isolated subprocesses.
@@ -317,7 +319,7 @@ Every phase reads one strict JSON contract on stdin and writes the next on stdou
 
 - **Chunking strategy.** `rag-p04 --strategy NAME` picks a chunker from the registry in `chunkers.py` (`sliding_window`, `recursive`). The chosen name is recorded in `Phase04ChunkedOutput.chunk_strategy`. Artifacts written before this field existed still validate (default `sliding_window`). To add a chunker, write a `(section, max_words, overlap) -> list[DocumentChunk]` function and register it in `CHUNKERS`. Chunk ids must be unique per section, because they derive the Qdrant point ids.
 - **External stage drop-in via pipe.** Any program that reads `Phase04ChunkedOutput` JSON on stdin and writes the same schema on stdout can sit between `rag-p04` and `rag-p05`. Nothing else changes.
-- **Pass-through stage pattern.** `rag-p04b` takes `Phase04ChunkedOutput` and emits it unchanged (it re-emits the validated payload unchanged, byte-identical when the input came from a `rag-p*` stage, so `chunk_strategy` and `run_id` survive). As a side effect it writes `artifacts/04b_graph.json`, an entity co-occurrence graph (`GraphArtifact`: nodes, weighted edges, chunk ids) built with a heuristic extractor. Use this pattern for any stage that observes the stream and produces a side artifact.
+- **Pass-through stage pattern.** `rag-p04b` takes `Phase04ChunkedOutput` and emits it with its fields intact (it re-emits the validated payload, byte-identical when the input came from a `rag-p*` stage, so `chunk_strategy` and `run_id` survive). As a side effect it writes `artifacts/04b_graph.json`, an entity co-occurrence graph (`GraphArtifact`: nodes, weighted edges, chunk ids) built with a heuristic extractor. Use this pattern for any stage that observes the stream and produces a side artifact.
 
   ```powershell
   uv run rag-p04 -i artifacts/03_parsed.json -s recursive | uv run rag-p04b -g artifacts/04b_graph.json | uv run rag-p05

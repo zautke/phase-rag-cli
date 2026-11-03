@@ -37,7 +37,8 @@ def Usage() -> str:
     return (
         "Usage: rag-p00 [--query / -q TEXT] [--in-file / -i PATH] [--out-file / -o PATH] "
         "[--qdrant-url / -u URL] [--qdrant-path / -p PATH] [--rerank-backend / -b BACKEND] "
-        "[--rerank-model / -m MODEL] [--crag-threshold / -t FLOAT] [--max-retries / -r INT] "
+        "[--rerank-model / -m MODEL] [--prefetch-limit / -l INT] [--rrf-k / -k INT] [--top-k / -K INT] "
+        "[--top-n / -n INT] [--batch-size / -B INT] [--crag-threshold / -t FLOAT] [--max-retries / -r INT] "
         "[--quiet-children / -c] [--quiet / -s]\n"
         "Orchestrates autonomous CRAG query-rewrite loops across Phases 06 -> 09 and final evaluation in Phase 10.\n"
         "Input precedence: (1) explicit --in-file if provided; (2) stdin if piped; (3) default artifacts/05_indexed.json."
@@ -219,9 +220,29 @@ def main(
         typer.Option(
             "--rerank-model",
             "-m",
-            help="Cross-Encoder model name",
+            help="Cross-Encoder model name (fastembed backend swaps the default to the Jina v2 ONNX model)",
         ),
     ] = "BAAI/bge-reranker-v2-m3",
+    prefetch_limit: Annotated[
+        int,
+        typer.Option("--prefetch-limit", "-l", help="P07 candidate pool per branch before RRF"),
+    ] = 25,
+    rrf_k: Annotated[
+        int,
+        typer.Option("--rrf-k", "-k", help="P07 Reciprocal Rank Fusion k constant"),
+    ] = 60,
+    top_k: Annotated[
+        int,
+        typer.Option("--top-k", "-K", help="P07 final fused candidates returned"),
+    ] = 10,
+    top_n: Annotated[
+        int,
+        typer.Option("--top-n", "-n", help="P08 final reranked contexts"),
+    ] = 5,
+    batch_size: Annotated[
+        int,
+        typer.Option("--batch-size", "-B", help="P08 cross-encoder batch size"),
+    ] = 16,
     crag_threshold: Annotated[
         float,
         typer.Option(
@@ -316,6 +337,12 @@ def main(
             qdrant_path,
             "--out-file",
             str(attempt_dir / "07_retrieved.json"),
+            "--prefetch-limit",
+            str(prefetch_limit),
+            "--rrf-k",
+            str(rrf_k),
+            "--top-k",
+            str(top_k),
         ]
         if qdrant_url:
             p07_args.extend(["--qdrant-url", qdrant_url])
@@ -337,6 +364,10 @@ def main(
                 rerank_backend,
                 "--model",
                 rerank_model,
+                "--top-n",
+                str(top_n),
+                "--batch-size",
+                str(batch_size),
                 "--out-file",
                 str(attempt_dir / "08_reranked.json"),
             ],

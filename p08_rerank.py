@@ -77,7 +77,7 @@ def main(
         typer.Option(
             "--model",
             "-m",
-            help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual)",
+            help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual; with --backend fastembed the default swaps to the Jina v2 ONNX model)",
         ),
     ] = DEFAULT_RERANK_MODEL,
     backend: Annotated[

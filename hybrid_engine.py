@@ -144,6 +144,13 @@ def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, x))))
 
 
+def resolve_rerank_model(model_name: str, backend: str) -> str:
+    """fastembed cannot serve the default torch model; swap in its ONNX default."""
+    if backend == "fastembed" and model_name == DEFAULT_RERANK_MODEL:
+        return DEFAULT_FASTEMBED_RERANK_MODEL
+    return model_name
+
+
 def rerank_passages_batch(
     query: str,
     passages: list[str],
@@ -159,6 +166,7 @@ def rerank_passages_batch(
     if not passages:
         return []
 
+    model_name = resolve_rerank_model(model_name, backend)
     global _fe_reranker, _st_reranker, _loaded_rerank_key
     cache_key = f"{backend}:{model_name}"
 
