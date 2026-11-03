@@ -515,4 +515,4 @@ def test_fastembed_cache_dir_env_expands_and_creates(tmp_path, monkeypatch):
     assert got == str(tmp_path / "fe_cache")
     assert (tmp_path / "fe_cache").is_dir()
     monkeypatch.delenv("RAG_FASTEMBED_CACHE_DIR")
-    assert hybrid_engine.fastembed_cache_dir() == str(tmp_path / ".cache" / "fastembed")
+    assert hybrid_engine.fastembed_cache_dir() is None

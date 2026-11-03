@@ -67,9 +67,11 @@ def get_dense_embedder() -> tuple[Any, Literal["sentence_transformers", "fastemb
     return _dense_model, _dense_backend
 
 
-def fastembed_cache_dir() -> str:
-    """Persistent fastembed model cache (default is the system temp dir, which gets wiped)."""
-    raw = os.environ.get("RAG_FASTEMBED_CACHE_DIR") or str(Path.home() / ".cache" / "fastembed")
+def fastembed_cache_dir() -> str | None:
+    """Opt-in persistent fastembed cache; None keeps fastembed's own default (system temp dir)."""
+    raw = os.environ.get("RAG_FASTEMBED_CACHE_DIR")
+    if not raw:
+        return None
     path = Path(raw).expanduser()
     path.mkdir(parents=True, exist_ok=True)
     return str(path)
