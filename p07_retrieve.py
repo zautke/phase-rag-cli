@@ -83,7 +83,7 @@ def main(
     ] = False,
 ) -> None:
     upstream: Phase06QueryPlanOutput = cli_engine.load_upstream(in_file)
-    collection = upstream.index_snapshot.qdrant_collection
+    collection = upstream.qdrant_collection
 
     # 1. Encode dense query (original query + HyDE expansion) and sparse query (original lexical query)
     q_dense_vec = embed_dense_batch([f"{upstream.original_query}\n{upstream.hyde_passage}"])[0]

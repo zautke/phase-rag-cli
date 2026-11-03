@@ -122,7 +122,7 @@ class Phase06QueryPlanOutput(BasePhasePayload):
     sub_queries: list[str]
     hyde_passage: str
     metadata_filters: dict[str, Any]
-    index_snapshot: Phase05IndexedOutput
+    qdrant_collection: str
 
 
 class RetrievedCandidate(BaseModel):

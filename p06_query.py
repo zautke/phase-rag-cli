@@ -77,7 +77,7 @@ def main(
         sub_queries=sub_queries,
         hyde_passage=hyde_passage,
         metadata_filters={"collection": upstream.qdrant_collection},
-        index_snapshot=upstream,
+        qdrant_collection=upstream.qdrant_collection,
     )
     cli_engine.emit(output, out_file, quiet)
 
