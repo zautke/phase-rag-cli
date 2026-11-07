@@ -1,0 +1,17 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [development, main]
+  push:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff check .
+      # non-live only: pyproject addopts = "-m 'not live'"; no model downloads in CI
+      - run: uv run pytest -q
