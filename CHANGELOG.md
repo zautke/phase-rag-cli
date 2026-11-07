@@ -10,7 +10,7 @@
 - P04 chunker registry: `--strategy sliding_window|recursive` (`chunkers.py`); `Phase04ChunkedOutput.chunk_strategy`.
 - `model_fetch.ensure_model`: every model is fetched with aria2c (resumable, 8 connections, retries) into the HF cache layout, announced and with live progress on stderr; `.complete` marker; `refs/main` written only after a verified fetch. aria2c is required (fail-fast with a per-OS install hint); Linux resolves CPU torch.
 - Battery consolidation: one `verify_pipeline.py` core plus thin `verify_pipeline.ps1` / `verify_pipeline.sh` wrappers with identical flags; every phase exit is checked, CRAG convergence is asserted, transcripts go to `verify_logs/`. Live tests carry the `live` pytest marker and are excluded by default.
-- CI: `.github/workflows/ci.yml` runs `ruff check` and non-live `pytest` on pull requests and pushes.
+- CI: `.github/workflows/ci.yml` runs `ruff check` and non-live `pytest` on pull requests, and pushes to development/main.
 
 ### Changed
 - `Phase06QueryPlanOutput.qdrant_collection` replaces the embedded `index_snapshot`.

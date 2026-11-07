@@ -129,7 +129,7 @@ Both wrappers call the single core `verify_pipeline.py`: Stage 0 static audit (n
 wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=`$HOME/.local/bin:`$PATH UV_PROJECT_ENVIRONMENT=`$HOME/.venvs/phase-rag; cd /mnt/c/<path-to-repo> && uv sync --all-extras && ./verify_pipeline.sh -s"
 ```
 
-Use `--exec` (plain `--` fails on a PATH containing `(x86)`) and a Linux `UV_PROJECT_ENVIRONMENT` (the Windows `.venv` is unusable from Linux). CI (`.github/workflows/ci.yml`) runs `ruff check` and the non-live pytest suite on every pull request and push; it downloads no models.
+Use `--exec` (plain `--` fails on a PATH containing `(x86)`) and a Linux `UV_PROJECT_ENVIRONMENT` (the Windows `.venv` is unusable from Linux). CI (`.github/workflows/ci.yml`) runs `ruff check` and the non-live pytest suite on every pull request and on pushes to `development` / `main`; it downloads no models.
 
 ## Branches and versions
 
