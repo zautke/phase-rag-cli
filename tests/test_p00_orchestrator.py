@@ -307,3 +307,33 @@ def test_d9_other_phases_empty_stdin_is_a_usage_error(tmp_path: Path) -> None:
 
     res = CliRunner().invoke(p06_query.app, ["-o", str(tmp_path / "o.json")], input="")
     assert res.exit_code == 2, res.output
+
+
+# --- D13: P00 forwards only options the user set explicitly --------------------------------------
+def test_d13_unset_options_are_not_forwarded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("RAG_CRAG_THRESHOLD", raising=False)
+    monkeypatch.setenv("QDRANT_URL", "http://env-only:1")  # env-set, not on the command line
+    h = Harness(monkeypatch, tmp_path)
+    assert h.run("-r", "0").exit_code == 0
+    assert sorted(a for a in h.args("p07_retrieve.py") if a.startswith("--")) == ["--out-file"]
+    assert sorted(a for a in h.args("p08_rerank.py") if a.startswith("--")) == ["--out-file"]
+    assert [a for a in h.args("p09_generate.py") if a.startswith("--")] == ["--out-file"]
+
+
+def test_d13_explicit_options_are_forwarded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("RAG_CRAG_THRESHOLD", raising=False)
+    h = Harness(monkeypatch, tmp_path)
+    res = h.run("-r", "0", "-t", "0.8", "-b", "fastembed", "-m", "x/y", "-p", "/q", "-u", "http://x:1")
+    assert res.exit_code == 0, res.output
+    a09, a08, a07 = h.args("p09_generate.py"), h.args("p08_rerank.py"), h.args("p07_retrieve.py")
+    assert a09[a09.index("--crag-threshold") + 1] == "0.8"
+    assert a08[a08.index("--backend") + 1] == "fastembed" and a08[a08.index("--model") + 1] == "x/y"
+    assert a07[a07.index("--qdrant-path") + 1] == "/q"
+    assert a07[a07.index("--qdrant-url") + 1] == "http://x:1"
+
+
+def test_d13_env_threshold_is_left_to_the_child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("RAG_CRAG_THRESHOLD", "0.9")
+    h = Harness(monkeypatch, tmp_path)
+    assert h.run("-r", "0").exit_code == 0
+    assert "--crag-threshold" not in h.args("p09_generate.py")  # child inherits the env var

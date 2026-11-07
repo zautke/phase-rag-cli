@@ -24,7 +24,7 @@ def Usage() -> str:
     )
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     query: Annotated[
         str,

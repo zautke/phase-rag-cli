@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from hybrid_engine import (
+    DEFAULT_RERANK_BACKEND,
     DEFAULT_RERANK_MODEL,
     RERANK_BACKENDS,
     rerank_passages_batch,
@@ -75,7 +76,7 @@ def assemble_xml_context(selected: list[RerankedContextItem], reorder_litm: bool
     return "\n".join(parts)
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
@@ -106,9 +107,9 @@ def main(
         typer.Option(
             "--backend",
             "-b",
-            help=f"Reranker plugin ({'|'.join(sorted(RERANK_BACKENDS))}): 'transformers' = PyTorch/MPS/CUDA, 'fastembed' = ONNX",
+            help=f"Reranker plugin ({'|'.join(sorted(RERANK_BACKENDS))}): 'sentence_transformers' = PyTorch/MPS/CUDA, 'fastembed' = ONNX",
         ),
-    ] = "transformers",
+    ] = DEFAULT_RERANK_BACKEND,
     batch_size: Annotated[
         int,
         typer.Option(

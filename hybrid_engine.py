@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
 from fastembed import SparseTextEmbedding, TextEmbedding
 from huggingface_hub import constants
 from qdrant_client import QdrantClient, models
@@ -23,9 +24,11 @@ from model_fetch import ensure_model
 DEFAULT_DENSE_BACKEND = "sentence_transformers"
 DEFAULT_DENSE_MODEL = "jinaai/jina-embeddings-v3"
 DEFAULT_SPARSE_MODEL = "prithivida/Splade_PP_en_v1"
+DEFAULT_QDRANT_PATH = "./qdrant_storage"  # mirrored in .env.example (QDRANT_PATH)
 DENSE_VECTOR_NAME = "jina-dense"
 SPARSE_VECTOR_NAME = "splade-sparse"
 
+DEFAULT_RERANK_BACKEND = "sentence_transformers"
 DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 DEFAULT_FASTEMBED_RERANK_MODEL = "jinaai/jina-reranker-v2-base-multilingual"
 
@@ -227,19 +230,20 @@ def _rerank_fastembed(query: str, passages: list[str], model_name: str, batch_si
     return [round(_sigmoid(float(s)), 4) for s in raw]
 
 
-def _rerank_transformers(query: str, passages: list[str], model_name: str, batch_size: int) -> list[float]:
-    # sentence-transformers >= 6.2 already applies Sigmoid for num_labels=1: scores stay raw
+def _rerank_sentence_transformers(query: str, passages: list[str], model_name: str, batch_size: int) -> list[float]:
+    # sentence-transformers >= 6.2 applies the model's own Sigmoid for num_labels=1; clip guards
+    # models whose head has no sigmoid so the [0, 1] contract holds for every backend
     preds = _st_cross_encoder(model_name).predict(
         [[query, p] for p in passages],
         batch_size=batch_size,
         apply_softmax=False,
         show_progress_bar=False,
     )
-    return [round(float(s), 4) for s in preds]
+    return [round(float(s), 4) for s in np.clip(np.asarray(preds, dtype=float), 0.0, 1.0)]
 
 
 RERANK_BACKENDS: dict[str, Callable[..., list[float]]] = {
-    "transformers": _rerank_transformers,
+    "sentence_transformers": _rerank_sentence_transformers,
     "fastembed": _rerank_fastembed,
 }
 
@@ -248,7 +252,7 @@ def rerank_passages_batch(
     query: str,
     passages: list[str],
     model_name: str = DEFAULT_RERANK_MODEL,
-    backend: str = "transformers",
+    backend: str = DEFAULT_RERANK_BACKEND,
     batch_size: int = 16,
 ) -> list[float]:
     """Calibrated [0.0, 1.0] cross-encoder relevance scores for (query, passage) pairs."""

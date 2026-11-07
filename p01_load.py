@@ -23,7 +23,7 @@ def Usage() -> str:
     )
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     source_dir: Annotated[
         Path | None,

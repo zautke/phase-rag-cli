@@ -270,7 +270,7 @@ run_phase "rag-p00 stress" 0 artifacts/stdout_00_loop.json artifacts/stderr_00_l
   --quiet-children
 validate_triplex_artifact "00_CRAG_LOOP" "artifacts/00_crag_loop_summary.json" "PhaseCRAGLoopOutput" "artifacts/stdout_00_loop.json"
 
-# 3b. Convergence: all rag-p00 defaults (query, transformers bge-reranker-v2-m3, -t 0.65, -r 3) must end GROUNDED
+# 3b. Convergence: all rag-p00 defaults (query, sentence_transformers bge-reranker-v2-m3, -t 0.65, -r 2) must end GROUNDED
 #     with converged == true. -i is explicit only so p00 never falls back to reading stdin.
 echo -e "${YELLOW}-> Exercising rag-p00 convergence run (defaults, must converge GROUNDED)...${RESET}"
 run_phase "rag-p00 default" 0 artifacts/stdout_00_default.json artifacts/stderr_00_default.txt uv run rag-p00 -c -s \

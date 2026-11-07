@@ -7,6 +7,8 @@ from typing import Annotated
 import typer
 
 from rag_contracts import (
+    DEFAULT_CRAG_THRESHOLD,
+    CragVerdict,
     Phase08RerankedOutput,
     Phase09GenerationOutput,
     PhaseCLI,
@@ -35,7 +37,7 @@ def extract_grounded_answer(
     top_contexts: list[RerankedContextItem],
     crag_threshold: float,
     max_score: float,
-    verdict: str,
+    verdict: CragVerdict,
 ) -> tuple[str, list[str]]:
     citations = [f"[{c.doc_id}:{c.chunk_id}]" for c in top_contexts]
     if not top_contexts:
@@ -110,7 +112,7 @@ def extract_grounded_answer(
     return synthesized, citations
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
@@ -133,9 +135,10 @@ def main(
         typer.Option(
             "--crag-threshold",
             "-t",
+            envvar="RAG_CRAG_THRESHOLD",
             help="Minimum Cross-Encoder score required for GROUNDED verdict",
         ),
-    ] = 0.60,
+    ] = DEFAULT_CRAG_THRESHOLD,
     quiet: Annotated[
         bool,
         typer.Option(
@@ -149,7 +152,7 @@ def main(
     max_score = max(
         (c.cross_encoder_score for c in upstream.top_contexts), default=0.0
     )
-    verdict = "GROUNDED" if max_score >= crag_threshold else "REWRITE_REQUIRED"
+    verdict: CragVerdict = "GROUNDED" if max_score >= crag_threshold else "REWRITE_REQUIRED"
 
     synthesized, citations = extract_grounded_answer(
         query=upstream.original_query,

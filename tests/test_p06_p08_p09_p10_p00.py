@@ -457,7 +457,7 @@ def test_resolve_rerank_model_wires_fastembed_default() -> None:
     )
 
     assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "fastembed") == DEFAULT_FASTEMBED_RERANK_MODEL
-    assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "transformers") == DEFAULT_RERANK_MODEL
+    assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "sentence_transformers") == DEFAULT_RERANK_MODEL
     assert resolve_rerank_model("custom/model", "fastembed") == "custom/model"
 
 

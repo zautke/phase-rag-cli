@@ -241,7 +241,7 @@ Model downloads need **aria2c** on PATH (`winget install aria2.aria2` / `sudo ap
   - `-i`, `--in-file`: Upstream retrieved candidates.
   - `-o`, `--out-file`: Output file path (default: `artifacts/08_reranked.json`).
   - `-n`, `--top-n`: Number of reranked candidates to retain (default: `5`).
-  - `-b`, `--backend`: Reranker backend: `fastembed` or `transformers` (default: `fastembed`).
+  - `-b`, `--backend`: Reranker plugin: `sentence_transformers` or `fastembed` (default: `sentence_transformers`).
   - `-m`, `--model`: Cross-Encoder model (default: `jinaai/jina-reranker-v2-base-multilingual`).
 - **Functionality:**
   1. Scores `(query, passage)` pairs with a Cross-Encoder to compute continuous logits.

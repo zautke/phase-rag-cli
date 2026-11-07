@@ -313,7 +313,7 @@ Write-Host "-> Exercising rag-p00 stress run (--crag-threshold 0.92, schema only
 Invoke-Phase "rag-p00 stress" "run rag-p00 --in-file artifacts/05_indexed.json --out-file artifacts/00_crag_loop_summary.json --query `"How are things combined and retried?`" --qdrant-path ./qdrant_storage --rerank-backend fastembed --rerank-model jinaai/jina-reranker-v2-base-multilingual --crag-threshold 0.92 --max-retries 2 --quiet-children" "artifacts/stdout_00_loop.json" "artifacts/stderr_00_loop.txt"
 Validate-TriplexArtifact "00_CRAG_LOOP" "artifacts/00_crag_loop_summary.json" "PhaseCRAGLoopOutput" "artifacts/stdout_00_loop.json"
 
-# 3b. Convergence: all rag-p00 defaults (query, transformers bge-reranker-v2-m3, -t 0.65, -r 3) must end GROUNDED
+# 3b. Convergence: all rag-p00 defaults (query, sentence_transformers bge-reranker-v2-m3, -t 0.65, -r 2) must end GROUNDED
 #     with converged == true. -i is explicit only so p00 never falls back to reading stdin.
 Write-Host "-> Exercising rag-p00 convergence run (defaults, must converge GROUNDED)..." -ForegroundColor Yellow
 Invoke-Phase "rag-p00 default" "run rag-p00 -c -s -i artifacts/05_indexed.json -o artifacts/00_crag_default.json" "artifacts/stdout_00_default.json" "artifacts/stderr_00_default.txt"

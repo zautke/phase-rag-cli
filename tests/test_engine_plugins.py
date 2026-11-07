@@ -35,7 +35,7 @@ def _noop(*_a, **_k) -> None:
 def test_registries_hold_expected_names() -> None:
     assert set(he.DENSE_BACKENDS) == {"sentence_transformers", "fastembed"}
     assert set(he.SPARSE_BACKENDS) == {"fastembed"}
-    assert set(he.RERANK_BACKENDS) == {"transformers", "fastembed"}
+    assert set(he.RERANK_BACKENDS) == {"sentence_transformers", "fastembed"}
 
 
 @pytest.mark.parametrize("registry", ["DENSE_BACKENDS", "SPARSE_BACKENDS", "RERANK_BACKENDS"])
@@ -194,18 +194,21 @@ def test_d5_fastembed_reranker_uses_hf_cache_root(monkeypatch: pytest.MonkeyPatc
     assert seen == [constants.HF_HUB_CACHE]
 
 
-def test_d1_transformers_rerank_returns_scores_raw(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_st_rerank_keeps_model_activation_and_clips_to_unit_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeCrossEncoder:
         def __init__(self, name: str, trust_remote_code: bool = False, max_length: int = 0) -> None:
             pass
 
         def predict(self, pairs, batch_size, apply_softmax, show_progress_bar):
-            return [1.7, -0.5, 0.0123]  # out-of-range values: a second sigmoid would change them
+            return [1.7, -0.5, 0.0123, 0.5]  # a head without sigmoid yields out-of-range values
 
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(CrossEncoder=FakeCrossEncoder))
     monkeypatch.setattr(he, "prefetch_st", _noop)
-    scores = he.rerank_passages_batch("q", ["a", "b", "c"], model_name="test/st-rerank", backend="transformers")
-    assert scores == [1.7, -0.5, 0.0123]  # raw: no second sigmoid, ST already activated
+    scores = he.rerank_passages_batch(
+        "q", ["a", "b", "c", "d"], model_name="test/st-rerank", backend="sentence_transformers"
+    )
+    # in-range scores pass through untouched (no second sigmoid); out-of-range ones are clipped to [0, 1]
+    assert scores == [1.0, 0.0, 0.0123, 0.5]
 
 
 # --- D8: quiet qdrant probe ------------------------------------------------------------------

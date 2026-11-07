@@ -9,6 +9,7 @@ from qdrant_client import models
 from hybrid_engine import (
     DEFAULT_DENSE_BACKEND,
     DEFAULT_DENSE_MODEL,
+    DEFAULT_QDRANT_PATH,
     DEFAULT_SPARSE_MODEL,
     DENSE_BACKENDS,
     DENSE_VECTOR_NAME,
@@ -47,7 +48,7 @@ def Usage() -> str:
     )
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
@@ -75,9 +76,10 @@ def main(
         typer.Option(
             "--qdrant-path",
             "-p",
+            envvar="QDRANT_PATH",
             help="Local persistent Qdrant path if no URL",
         ),
-    ] = "./qdrant_storage",
+    ] = DEFAULT_QDRANT_PATH,
     dense_backend: Annotated[
         str,
         typer.Option(

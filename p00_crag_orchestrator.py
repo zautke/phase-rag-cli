@@ -12,6 +12,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from rag_contracts import (
+    DEFAULT_CRAG_THRESHOLD,
     CRAGAttemptRecord,
     Phase05IndexedOutput,
     Phase06QueryPlanOutput,
@@ -43,6 +44,11 @@ def Usage() -> str:
         "Orchestrates autonomous CRAG query-rewrite loops across Phases 06 -> 09 and final evaluation in Phase 10.\n"
         "Input precedence: (1) explicit --in-file if provided; (2) stdin if piped; (3) default artifacts/05_indexed.json."
     )
+
+
+def forward(**opts: object) -> list[str]:
+    """`--kebab-name value` args for the options that are set; None is left to the child's own default/env."""
+    return [x for k, v in opts.items() if v is not None for x in ("--" + k.replace("_", "-"), str(v))]
 
 
 def invoke_cli_phase(
@@ -152,8 +158,9 @@ def synthesize_rewritten_query(
     return rewritten, reason
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
+    ctx: typer.Context,
     query: Annotated[
         str,
         typer.Option(
@@ -188,58 +195,58 @@ def main(
         ),
     ] = None,
     qdrant_path: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--qdrant-path",
             "-p",
-            help="Local persistent Qdrant path",
+            help="Local persistent Qdrant path, forwarded to P07 only when given (else QDRANT_PATH / P07 default)",
         ),
-    ] = "./qdrant_storage",
+    ] = None,
     rerank_backend: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rerank-backend",
             "-b",
-            help="Cross-Encoder backend ('transformers' or 'fastembed')",
+            help="P08 reranker plugin (sentence_transformers|fastembed), forwarded only when given",
         ),
-    ] = "transformers",
+    ] = None,
     rerank_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rerank-model",
             "-m",
-            help="Cross-Encoder model name (with -b fastembed the torch default maps to jinaai/jina-reranker-v2-base-multilingual)",
+            help="P08 cross-encoder model, forwarded only when given",
         ),
-    ] = "BAAI/bge-reranker-v2-m3",
+    ] = None,
     prefetch_limit: Annotated[
-        int,
-        typer.Option("--prefetch-limit", "-l", help="P07 candidate pool per branch before RRF"),
-    ] = 25,
+        int | None,
+        typer.Option("--prefetch-limit", "-l", help="P07 candidate pool per branch before RRF (forwarded only when given)"),
+    ] = None,
     rrf_k: Annotated[
-        int,
-        typer.Option("--rrf-k", "-k", help="P07 Reciprocal Rank Fusion k constant"),
-    ] = 60,
+        int | None,
+        typer.Option("--rrf-k", "-k", help="P07 Reciprocal Rank Fusion k constant (forwarded only when given)"),
+    ] = None,
     top_k: Annotated[
-        int,
-        typer.Option("--top-k", "-K", help="P07 final fused candidates returned"),
-    ] = 10,
+        int | None,
+        typer.Option("--top-k", "-K", help="P07 final fused candidates returned (forwarded only when given)"),
+    ] = None,
     top_n: Annotated[
-        int,
-        typer.Option("--top-n", "-n", help="P08 final reranked contexts"),
-    ] = 5,
+        int | None,
+        typer.Option("--top-n", "-n", help="P08 final reranked contexts (forwarded only when given)"),
+    ] = None,
     batch_size: Annotated[
-        int,
-        typer.Option("--batch-size", "-B", help="P08 cross-encoder batch size"),
-    ] = 16,
+        int | None,
+        typer.Option("--batch-size", "-B", help="P08 cross-encoder batch size (forwarded only when given)"),
+    ] = None,
     crag_threshold: Annotated[
         float,
         typer.Option(
             "--crag-threshold",
             "-t",
-            help="Minimum Cross-Encoder score required for GROUNDED verdict",
+            envvar="RAG_CRAG_THRESHOLD",
+            help="Minimum Cross-Encoder score required for GROUNDED verdict (P09 reads RAG_CRAG_THRESHOLD itself)",
         ),
-    ] = 0.65,
-    max_retries: Annotated[
+    ] = DEFAULT_CRAG_THRESHOLD,    max_retries: Annotated[
         int,
         typer.Option(
             "--max-retries",
@@ -281,6 +288,11 @@ def main(
 
     artifacts_dir = out_file.resolve().parent
 
+    def explicit(name: str) -> bool:
+        # by enum name: typer >= 0.27 vendors its own click, so the enum class differs by version
+        return getattr(ctx.get_parameter_source(name), "name", None) == "COMMANDLINE"
+
+    # An option left to env/default is not forwarded: children resolve it from the same environment.
     max_attempts = max_retries + 1
     quiet_child = quiet_children or quiet
     for attempt in range(1, max_attempts + 1):
@@ -307,20 +319,14 @@ def main(
         p06_out = Phase06QueryPlanOutput.model_validate_json(p06_raw)
 
         # --- Phase 07: Live Qdrant Hybrid Retrieval ---
-        p07_args = [
-            "--qdrant-path",
-            qdrant_path,
-            "--out-file",
-            str(attempt_dir / "07_retrieved.json"),
-            "--prefetch-limit",
-            str(prefetch_limit),
-            "--rrf-k",
-            str(rrf_k),
-            "--top-k",
-            str(top_k),
-        ]
-        if qdrant_url:
-            p07_args.extend(["--qdrant-url", qdrant_url])
+        p07_args = forward(
+            qdrant_path=qdrant_path,
+            qdrant_url=qdrant_url if explicit("qdrant_url") else None,
+            prefetch_limit=prefetch_limit,
+            rrf_k=rrf_k,
+            top_k=top_k,
+            out_file=attempt_dir / "07_retrieved.json",
+        )
 
         p07_raw = invoke_cli_phase(
             "p07_retrieve.py",
@@ -334,18 +340,13 @@ def main(
         p08_raw = invoke_cli_phase(
             "p08_rerank.py",
             input_json=p07_out.model_dump_json(),
-            args=[
-                "--backend",
-                rerank_backend,
-                "--model",
-                rerank_model,
-                "--top-n",
-                str(top_n),
-                "--batch-size",
-                str(batch_size),
-                "--out-file",
-                str(attempt_dir / "08_reranked.json"),
-            ],
+            args=forward(
+                backend=rerank_backend,
+                model=rerank_model,
+                top_n=top_n,
+                batch_size=batch_size,
+                out_file=attempt_dir / "08_reranked.json",
+            ),
             quiet_child=quiet_child,
         )
         p08_out = Phase08RerankedOutput.model_validate_json(p08_raw)
@@ -354,12 +355,10 @@ def main(
         p09_raw = invoke_cli_phase(
             "p09_generate.py",
             input_json=p08_out.model_dump_json(),
-            args=[
-                "--crag-threshold",
-                str(crag_threshold),
-                "--out-file",
-                str(attempt_dir / "09_generated.json"),
-            ],
+            args=forward(
+                crag_threshold=crag_threshold if explicit("crag_threshold") else None,
+                out_file=attempt_dir / "09_generated.json",
+            ),
             quiet_child=quiet_child,
         )
         p09_out = Phase09GenerationOutput.model_validate_json(p09_raw)

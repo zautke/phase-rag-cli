@@ -7,7 +7,7 @@ import io
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 import typer
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +24,10 @@ def ensure_utf8_streams() -> None:
             with contextlib.suppress( OSError, ValueError):
                 stream.reconfigure(encoding="utf-8")
 
+
+# One CRAG threshold default for P09 and P00 (mirrored in .env.example as RAG_CRAG_THRESHOLD)
+DEFAULT_CRAG_THRESHOLD = 0.65
+CragVerdict = Literal["GROUNDED", "REWRITE_REQUIRED"]
 
 # Console strictly targets stderr so stdout remains a pure JSON pipe
 err_console = Console(stderr=True)
@@ -166,7 +170,7 @@ class Phase08RerankedOutput(BasePhasePayload):
 class Phase09GenerationOutput(BasePhasePayload):
     phase_name: str = "09_crag_generation"
     original_query: str
-    crag_verdict: str                  # "GROUNDED" | "AMBIGUOUS" | "REWRITE_REQUIRED"
+    crag_verdict: CragVerdict
     grounded_confidence: float
     synthesized_answer: str
     citations: list[str]
@@ -175,7 +179,6 @@ class Phase09GenerationOutput(BasePhasePayload):
 
 class Phase10EvalOutput(BasePhasePayload):
     phase_name: str = "10_telemetry_eval"
-    run_id: str
     ndcg_at_k: float
     context_precision: float
     faithfulness_score: float
@@ -189,7 +192,7 @@ class CRAGAttemptRecord(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     attempt: int
     query_used: str
-    crag_verdict: str
+    crag_verdict: CragVerdict
     grounded_confidence: float
     top_chunk_ids: list[str]
     rewrite_reason: str | None = None

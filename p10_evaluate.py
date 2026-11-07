@@ -70,7 +70,7 @@ def compute_answer_relevance(query: str, answer: str) -> float:
     return round(matches / len(q_terms), 4)
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
