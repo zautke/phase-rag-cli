@@ -50,7 +50,7 @@ def invoke_cli_phase(
 ) -> str:
     """
     Spawns an isolated CLI phase subprocess, pipes validated JSON to its stdin,
-    allows child stderr telemetry to pass straight to the terminal, and captures stdout JSON.
+    lets child stderr telemetry pass straight to the terminal, and captures stdout JSON.
     """
     script_dir = Path(__file__).resolve().parent
     target_script = (
@@ -63,23 +63,17 @@ def invoke_cli_phase(
     if quiet_child:
         cmd.append("--quiet")
 
+    # stderr is inherited: child Rich telemetry reaches the terminal live; only stdout JSON is captured
     proc = subprocess.run(
         cmd,
         input=input_json,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         check=False,
     )
-    # Forward child's Rich stderr panels directly to our stderr console
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
-        sys.stderr.flush()
-
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"Subprocess {script} failed (exit {proc.returncode}):\n{proc.stderr}"
-        )
+        raise RuntimeError(f"Subprocess {script} failed (exit {proc.returncode}); see its stderr above")
     return proc.stdout.strip()
 
 
@@ -256,10 +250,10 @@ def main(
         typer.Option(
             "--max-retries",
             "-r",
-            min=1,
-            help="Maximum CRAG loopback attempts before forcing synthesis",
+            min=0,
+            help="Retries after the first attempt (N retries = up to N+1 attempts) before forcing synthesis",
         ),
-    ] = 3,
+    ] = 2,
     quiet_children: Annotated[
         bool,
         typer.Option(
@@ -277,9 +271,6 @@ def main(
         ),
     ] = False,
 ) -> None:
-    if max_retries < 1:
-        raise typer.BadParameter("--max-retries must be at least 1")
-
     # 1. Input precedence: explicit --in-file, then piped stdin, then artifacts/05_indexed.json fallback
     p05_indexed: Phase05IndexedOutput
     if in_file is not None:
@@ -308,13 +299,15 @@ def main(
 
     artifacts_dir = out_file.resolve().parent
 
-    for attempt in range(1, max_retries + 1):
+    max_attempts = max_retries + 1
+    quiet_child = quiet_children or quiet
+    for attempt in range(1, max_attempts + 1):
         attempt_dir = artifacts_dir / f"crag_attempt_{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
 
         if not quiet:
             err_console.rule(
-                f'[bold magenta]CRAG Loop Iteration {attempt}/{max_retries}[/bold magenta] | Query: [yellow]"{escape(current_query)}"[/yellow]'
+                f'[bold magenta]CRAG Loop Iteration {attempt}/{max_attempts}[/bold magenta] | Query: [yellow]"{escape(current_query)}"[/yellow]'
             )
 
         # --- Phase 06: Query Orchestration ---
@@ -327,7 +320,7 @@ def main(
                 "--out-file",
                 str(attempt_dir / "06_query_plan.json"),
             ],
-            quiet_child=quiet_children,
+            quiet_child=quiet_child,
         )
         p06_out = Phase06QueryPlanOutput.model_validate_json(p06_raw)
 
@@ -351,7 +344,7 @@ def main(
             "p07_retrieve.py",
             input_json=p06_out.model_dump_json(),
             args=p07_args,
-            quiet_child=quiet_children,
+            quiet_child=quiet_child,
         )
         p07_out = Phase07RetrievedOutput.model_validate_json(p07_raw)
 
@@ -371,7 +364,7 @@ def main(
                 "--out-file",
                 str(attempt_dir / "08_reranked.json"),
             ],
-            quiet_child=quiet_children,
+            quiet_child=quiet_child,
         )
         p08_out = Phase08RerankedOutput.model_validate_json(p08_raw)
 
@@ -385,7 +378,7 @@ def main(
                 "--out-file",
                 str(attempt_dir / "09_generated.json"),
             ],
-            quiet_child=quiet_children,
+            quiet_child=quiet_child,
         )
         p09_out = Phase09GenerationOutput.model_validate_json(p09_raw)
 
@@ -405,7 +398,7 @@ def main(
             break
 
         # Verdict == REWRITE_REQUIRED
-        if attempt < max_retries:
+        if attempt < max_attempts:
             next_query, reason = synthesize_rewritten_query(
                 initial_query=query,
                 current_query=current_query,
@@ -457,7 +450,7 @@ def main(
         "p10_evaluate.py",
         input_json=p09_out.model_dump_json(),
         args=["--out-file", str(artifacts_dir / "10_evaluated.json")],
-        quiet_child=quiet_children,
+        quiet_child=quiet_child,
     )
     p10_out = Phase10EvalOutput.model_validate_json(p10_raw)
 

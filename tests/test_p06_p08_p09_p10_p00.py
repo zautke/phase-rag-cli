@@ -419,7 +419,7 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
             "-t",
             "0.9999",
             "-r",
-            "2",
+            "1",
             "-c",
         ],
         cwd=str(external_dir),

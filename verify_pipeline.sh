@@ -2,7 +2,6 @@
 # verify_pipeline.sh
 # Complete Post-Implementation Review, Per-Phase Live Terminal Exercise, and Through-Test Battery.
 # Twin of verify_pipeline.ps1 (same stages, phases, flags and assertions).
-# Note: rag-p00 --max-retries is the TOTAL number of CRAG attempts (attempt 1 included), not retries after the first.
 set -euo pipefail
 
 BOLD="\033[1m"

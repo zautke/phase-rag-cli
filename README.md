@@ -298,7 +298,7 @@ Model downloads need **aria2c** on PATH (`winget install aria2.aria2` / `sudo ap
   - `-i`, `--in-file`: Upstream indexed payload.
   - `-o`, `--out-file`: Output summary path (default: `artifacts/00_crag_loop_summary.json`).
   - `-t`, `--crag-threshold`: Confidence threshold (default: `0.65`).
-  - `-r`, `--max-retries`: Total CRAG attempts (default: `3`).
+  - `-r`, `--max-retries`: Retries after the first attempt (default: `2`; `0` = single attempt).
   - `-l`, `--prefetch-limit` (25), `-k`, `--rrf-k` (60), `-K`, `--top-k` (10): forwarded to `rag-p07` on every attempt.
   - `-n`, `--top-n` (5), `-B`, `--batch-size` (16): forwarded to `rag-p08` on every attempt.
   - `-c`, `--quiet-children`: Suppress child phase telemetry to keep stderr clean.
