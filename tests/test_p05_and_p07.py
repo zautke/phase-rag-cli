@@ -45,11 +45,11 @@ def test_usage_and_short_long_flags_p05_and_p07() -> None:
 
 def test_hybrid_engine_constants_and_helpers() -> None:
     """Verify hybrid_engine constants, deterministic UUIDv5, and sigmoid calibration."""
-    assert hybrid_engine.DENSE_MODEL_NAME == "jinaai/jina-embeddings-v3"
-    assert hybrid_engine.SPARSE_MODEL_NAME == "prithivida/Splade_PP_en_v1"
+    assert hybrid_engine.DEFAULT_DENSE_BACKEND == "sentence_transformers"
+    assert hybrid_engine.DEFAULT_DENSE_MODEL == "jinaai/jina-embeddings-v3"
+    assert hybrid_engine.DEFAULT_SPARSE_MODEL == "prithivida/Splade_PP_en_v1"
     assert hybrid_engine.DENSE_VECTOR_NAME == "jina-dense"
     assert hybrid_engine.SPARSE_VECTOR_NAME == "splade-sparse"
-    assert hybrid_engine.DENSE_DIM == 1024
     assert hybrid_engine.DEFAULT_RERANK_MODEL == "BAAI/bge-reranker-v2-m3"
     assert (
         hybrid_engine.DEFAULT_FASTEMBED_RERANK_MODEL
@@ -190,6 +190,9 @@ def test_live_p05_index_and_p07_retrieve_end_to_end(tmp_path: Path) -> None:
         ),
         metadata_filters={"status": "production_verified"},
         qdrant_collection=out05_disk.qdrant_collection,
+        dense_backend=out05_disk.dense_backend,
+        dense_model=out05_disk.dense_model,
+        sparse_model=out05_disk.sparse_model,
     )
     f06.write_text(p06_payload.model_dump_json(indent=2), encoding="utf-8")
 

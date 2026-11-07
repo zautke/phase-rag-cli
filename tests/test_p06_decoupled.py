@@ -13,6 +13,9 @@ def plan_dict() -> dict:
         "hyde_passage": "h",
         "metadata_filters": {"collection": "c"},
         "qdrant_collection": "c",
+        "dense_backend": "sentence_transformers",
+        "dense_model": "d",
+        "sparse_model": "s",
     }
 
 

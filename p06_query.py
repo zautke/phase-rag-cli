@@ -78,6 +78,9 @@ def main(
         hyde_passage=hyde_passage,
         metadata_filters={"collection": upstream.qdrant_collection},
         qdrant_collection=upstream.qdrant_collection,
+        dense_backend=upstream.dense_backend,
+        dense_model=upstream.dense_model,
+        sparse_model=upstream.sparse_model,
     )
     cli_engine.emit(output, out_file, quiet)
 

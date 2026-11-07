@@ -7,7 +7,9 @@ import typer
 
 from hybrid_engine import (
     DEFAULT_RERANK_MODEL,
+    RERANK_BACKENDS,
     rerank_passages_batch,
+    resolve_backend,
     resolve_rerank_model,
 )
 from rag_contracts import (
@@ -87,7 +89,7 @@ def main(
         typer.Option(
             "--backend",
             "-b",
-            help="Execution runtime: 'transformers' (PyTorch/MPS/CUDA) or 'fastembed' (ONNX)",
+            help=f"Reranker plugin ({'|'.join(sorted(RERANK_BACKENDS))}): 'transformers' = PyTorch/MPS/CUDA, 'fastembed' = ONNX",
         ),
     ] = "transformers",
     batch_size: Annotated[
@@ -131,6 +133,11 @@ def main(
         ),
     ] = False,
 ) -> None:
+    rerank_backend = backend.lower()
+    try:
+        resolve_backend(RERANK_BACKENDS, rerank_backend, "rerank")
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
     upstream: Phase07RetrievedOutput = cli_engine.load_upstream(in_file)
     query = upstream.query_plan.original_query
     candidates = upstream.candidates
@@ -147,7 +154,6 @@ def main(
 
     # 1. Batch score all (query, contextualized_text) candidate pairs through the live Cross-Encoder
     passages = [cand.contextualized_text for cand in candidates]
-    rerank_backend = "fastembed" if backend.lower() == "fastembed" else "transformers"
     resolved_model = resolve_rerank_model(model_name, rerank_backend)
     if not quiet:
         err_console.print(f"[cyan]Reranker:[/cyan] {rerank_backend} / {resolved_model}")

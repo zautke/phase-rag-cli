@@ -86,8 +86,14 @@ def main(
     collection = upstream.qdrant_collection
 
     # 1. Encode dense query (original query + HyDE expansion) and sparse query (original lexical query)
-    q_dense_vec = embed_dense_batch([f"{upstream.original_query}\n{upstream.hyde_passage}"])[0]
-    q_sparse_idx, q_sparse_val = embed_sparse_batch([upstream.original_query])[0]
+    # Backend and models come from upstream (the index's own), so query/index can never mismatch.
+    q_dense_vec = embed_dense_batch(
+        [f"{upstream.original_query}\n{upstream.hyde_passage}"],
+        upstream.dense_backend,
+        upstream.dense_model,
+        query=True,
+    )[0]
+    q_sparse_idx, q_sparse_val = embed_sparse_batch([upstream.original_query], upstream.sparse_model)[0]
     q_sparse_vec = models.SparseVector(indices=q_sparse_idx, values=q_sparse_val)
 
     client = get_qdrant_client(qdrant_url, qdrant_path)

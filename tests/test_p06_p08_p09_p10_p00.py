@@ -464,7 +464,10 @@ def test_resolve_rerank_model_wires_fastembed_default() -> None:
 def test_p00_forwards_p07_p08_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from typer.testing import CliRunner
 
-    p05 = rc.Phase05IndexedOutput(run_id="r", qdrant_collection="c", indexed_records=[])
+    p05 = rc.Phase05IndexedOutput(
+        run_id="r", qdrant_collection="c", indexed_records=[],
+        dense_backend="sentence_transformers", dense_model="d", sparse_model="s",
+    )
     f05 = tmp_path / "05.json"
     f05.write_text(p05.model_dump_json(), encoding="utf-8")
     plan = rc.Phase06QueryPlanOutput(
@@ -475,6 +478,9 @@ def test_p00_forwards_p07_p08_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         hyde_passage="h",
         metadata_filters={},
         qdrant_collection="c",
+        dense_backend="sentence_transformers",
+        dense_model="d",
+        sparse_model="s",
     )
     p07 = rc.Phase07RetrievedOutput(run_id="r", query_plan=plan, candidates=[])
     calls: dict[str, list[str]] = {}
@@ -503,16 +509,3 @@ def test_p00_forwards_p07_p08_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert a07[a07.index("--top-k") + 1] == "4"
     assert a08[a08.index("--top-n") + 1] == "2"
     assert a08[a08.index("--batch-size") + 1] == "8"
-
-
-def test_fastembed_cache_dir_env_expands_and_creates(tmp_path, monkeypatch):
-    import hybrid_engine
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setenv("RAG_FASTEMBED_CACHE_DIR", "~/fe_cache")
-    got = hybrid_engine.fastembed_cache_dir()
-    assert got == str(tmp_path / "fe_cache")
-    assert (tmp_path / "fe_cache").is_dir()
-    monkeypatch.delenv("RAG_FASTEMBED_CACHE_DIR")
-    assert hybrid_engine.fastembed_cache_dir() is None

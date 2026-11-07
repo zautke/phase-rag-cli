@@ -7,13 +7,19 @@ import typer
 from qdrant_client import models
 
 from hybrid_engine import (
+    DEFAULT_DENSE_BACKEND,
+    DEFAULT_DENSE_MODEL,
+    DEFAULT_SPARSE_MODEL,
+    DENSE_BACKENDS,
     DENSE_VECTOR_NAME,
     SPARSE_VECTOR_NAME,
     deterministic_point_uuid,
     embed_dense_batch,
     embed_sparse_batch,
     ensure_hybrid_collection,
+    get_dense_embedder,
     get_qdrant_client,
+    resolve_backend,
 )
 from rag_contracts import (
     EnrichedIndexedChunk,
@@ -35,8 +41,9 @@ def Usage() -> str:
     return (
         "Usage: rag-p05 [--in-file / -i PATH] [--out-file / -o PATH] "
         "[--collection / -c NAME] [--qdrant-url / -u URL] [--qdrant-path / -p PATH] "
+        "[--dense-backend / -b NAME] [--dense-model / -m NAME] [--sparse-model / -s NAME] "
         "[--recreate / -r | --append / -a] [--quiet / -q]\n"
-        "Computes live Jina-v3 dense and SPLADE++ sparse embeddings and upserts to Qdrant."
+        "Computes dense and sparse embeddings with the named plugin backends and upserts to Qdrant."
     )
 
 
@@ -71,6 +78,23 @@ def main(
             help="Local persistent Qdrant path if no URL",
         ),
     ] = "./qdrant_storage",
+    dense_backend: Annotated[
+        str,
+        typer.Option(
+            "--dense-backend",
+            "-b",
+            envvar="RAG_DENSE_BACKEND",
+            help=f"Dense embedder plugin ({'|'.join(sorted(DENSE_BACKENDS))})",
+        ),
+    ] = DEFAULT_DENSE_BACKEND,
+    dense_model: Annotated[
+        str,
+        typer.Option("--dense-model", "-m", envvar="RAG_DENSE_MODEL", help="Dense embedding model"),
+    ] = DEFAULT_DENSE_MODEL,
+    sparse_model: Annotated[
+        str,
+        typer.Option("--sparse-model", "-s", envvar="RAG_SPARSE_MODEL", help="Sparse (SPLADE) model"),
+    ] = DEFAULT_SPARSE_MODEL,
     recreate: Annotated[
         bool,
         typer.Option(
@@ -84,6 +108,10 @@ def main(
         typer.Option("--quiet", "-q", help="Suppress stderr Rich panel"),
     ] = False,
 ) -> None:
+    try:
+        resolve_backend(DENSE_BACKENDS, dense_backend, "dense")
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
     upstream: Phase04ChunkedOutput = cli_engine.load_upstream(in_file)
 
     # 1. Build contextualized text strings for batch neural encoding
@@ -92,13 +120,14 @@ def main(
         for chk in upstream.chunks
     ]
 
-    # 2. Compute live Jina-v3 (1024-d dense) and SPLADE++ (sparse lexical expansion) vectors
-    dense_vectors = embed_dense_batch(contextualized_texts)
-    sparse_tuples = embed_sparse_batch(contextualized_texts)
+    # 2. Compute dense and sparse (lexical expansion) vectors with the named plugins
+    dense_vectors = embed_dense_batch(contextualized_texts, dense_backend, dense_model)
+    sparse_tuples = embed_sparse_batch(contextualized_texts, sparse_model)
 
-    # 3. Initialize Qdrant Hybrid Collection & build PointStructs
+    # 3. Initialize Qdrant Hybrid Collection (vector size from the loaded dense model) & build PointStructs
+    _, dense_dim = get_dense_embedder(dense_backend, dense_model)
     client = get_qdrant_client(qdrant_url, qdrant_path)
-    ensure_hybrid_collection(client, collection, recreate=recreate)
+    ensure_hybrid_collection(client, collection, dense_dim, recreate=recreate)
 
     indexed_records: list[EnrichedIndexedChunk] = []
     points: list[models.PointStruct] = []
@@ -143,6 +172,9 @@ def main(
     output = Phase05IndexedOutput(
         run_id=upstream.run_id,
         qdrant_collection=collection,
+        dense_backend=dense_backend,
+        dense_model=dense_model,
+        sparse_model=sparse_model,
         indexed_records=indexed_records,
     )
     cli_engine.emit(output, out_file, quiet)

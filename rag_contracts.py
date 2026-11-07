@@ -111,6 +111,9 @@ class EnrichedIndexedChunk(BaseModel):
 class Phase05IndexedOutput(BasePhasePayload):
     phase_name: str = "05_contextual_index"
     qdrant_collection: str
+    dense_backend: str
+    dense_model: str
+    sparse_model: str
     indexed_records: list[EnrichedIndexedChunk]
 
 
@@ -123,6 +126,9 @@ class Phase06QueryPlanOutput(BasePhasePayload):
     hyde_passage: str
     metadata_filters: dict[str, Any]
     qdrant_collection: str
+    dense_backend: str
+    dense_model: str
+    sparse_model: str
 
 
 class RetrievedCandidate(BaseModel):
