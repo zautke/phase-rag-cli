@@ -12,3 +12,4 @@ qdrant_*/
 dist/
 build/
 .env
+verify_logs/

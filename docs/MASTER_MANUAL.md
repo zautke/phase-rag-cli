@@ -52,7 +52,7 @@ uv sync --all-extras
 set -o pipefail
 uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04 -s recursive | uv run rag-p05 | uv run rag-p06 -q "your question" | uv run rag-p07 | uv run rag-p08 | uv run rag-p09 | uv run rag-p10
 ```
-fastembed models share the Hugging Face cache root with sentence-transformers (`HF_HOME` / `HF_HUB_CACHE`); run with `uv run --env-file .env …` or export the variables. Re-run from any persisted artifact: `uv run rag-p07 -i artifacts/06_query_plan.json | uv run rag-p08 | uv run rag-p09`. First run downloads Jina-v3 (~2.3 GB, HuggingFace cache), SPLADE++ and the reranker. `artifacts/05_indexed.json` carries full 1024-d vectors per chunk and is large. Qdrant is embedded at `./qdrant_storage` (no server); set `QDRANT_URL` or `--qdrant-url` for a server, an unreachable URL falls back to embedded. On Windows PowerShell 5.1 or pwsh < 7.4, pipes re-encode text; use the `subprocess.Popen` chain in `verify_pipeline.ps1` Stage 2.
+fastembed models share the Hugging Face cache root with sentence-transformers (`HF_HOME` / `HF_HUB_CACHE`); run with `uv run --env-file .env …` or export the variables. Re-run from any persisted artifact: `uv run rag-p07 -i artifacts/06_query_plan.json | uv run rag-p08 | uv run rag-p09`. First run downloads Jina-v3 (~2.3 GB, HuggingFace cache), SPLADE++ and the reranker. `artifacts/05_indexed.json` carries full 1024-d vectors per chunk and is large. Qdrant is embedded at `./qdrant_storage` (no server); set `QDRANT_URL` or `--qdrant-url` for a server, an unreachable URL falls back to embedded. On Windows PowerShell 5.1 or pwsh < 7.4, pipes re-encode text; use the `subprocess.Popen` chain in `verify_pipeline.py` Stage 2.
 
 ---
 
@@ -244,8 +244,8 @@ Give it a default (`Field(default_factory=list)` for mutables); the default must
 |---|---|---|
 | Unit/integration | `uv run pytest -q` | all pass (one live Qdrant test, ~5 min) |
 | Lint | `uv run ruff check .` | clean (line-length 100, py311) |
-| Battery, Windows | `pwsh -File verify_pipeline.ps1 [-SkipSync/-s] [-Quiet/-q] [-Help/-h]` | writes `artifacts/verify_ps1_<ts>.log`, deletes `artifacts/` and `qdrant_storage/`, then Stage 0 static (AST no-`print()` audit over all phase modules + `chunkers.py`; `client.close()` present in p05/p07; contract-chain identity), Stage 1 isolated runs of every phase through `Invoke-Phase` (every exit code checked, stderr tail on failure) incl. `rag-p04 -s recursive` → `artifacts/04_chunked_recursive.json`, plus the negative `rag-p04 -s nope` (exit 2, `Known:` on stderr, empty stdout), Stage 2 full 10-phase pipe with every stage's exit checked, Stage 3a `rag-p00 --crag-threshold 0.92 --max-retries 2` stress run (up to 3 attempts, schema only) and 3b `rag-p00` at defaults asserting `converged == true` and `GROUNDED` |
-| Battery, bash | `./verify_pipeline.sh [-s/--skip-sync] [-q/--quiet] [-h/--help]` | identical stages (`run_phase` wrapper, `PIPESTATUS` on the pipe, `utf-8-sig` validator, transcript `artifacts/verify_sh_<ts>.log`); on the Windows host run it on real Linux via WSL: `wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=$HOME/.local/bin:$PATH UV_PROJECT_ENVIRONMENT=$HOME/.venvs/<name> HF_HUB_DISABLE_XET=1; cd /mnt/c/<path> && uv sync --all-extras && ./verify_pipeline.sh"` |
+| Battery, Windows | `pwsh -File verify_pipeline.ps1 [-s/--skip-sync] [-q/--quiet] [-h/--help]` | thin wrapper (flags forwarded) around the single core `uv run python verify_pipeline.py`; transcript `verify_logs/verify_<host>_<ts>.log` (gitignored, outside `artifacts/`); Stage 0 `uv sync`, `ruff check`, AST syntax, no stdout `print()` in phase modules, every schema `strict=True, extra="forbid"`, contract-chain identity, `client.close()` in p05/p07, then wipes `artifacts/` and `qdrant_storage/`; Stage 1 isolated `rag-p01`..`p10` plus `rag-p04 -s recursive`, each: exit 0, non-empty stderr, artifact on disk, stdout == disk validated with the phase model; negatives (unknown `--strategy`, unknown `--dense-backend`, missing `--in-file`) must exit 2 with empty stdout; Stage 2 full 10-phase `uv run` Popen chain, every exit checked; Stage 3 `rag-p00 --crag-threshold 0.92` must NOT converge and the default run must go `REWRITE_REQUIRED` then `GROUNDED`; last stderr line is one JSON metrics line (`chunk_count_sliding`, `chunk_count_recursive`, `verify_wall_ms`) |
+| Battery, bash | `./verify_pipeline.sh [-s/--skip-sync] [-q/--quiet] [-h/--help]` | same flags, same core; on the Windows host run it on real Linux via WSL: `wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=$HOME/.local/bin:$PATH UV_PROJECT_ENVIRONMENT=$HOME/.venvs/<name> HF_HUB_DISABLE_XET=1; cd /mnt/c/<path> && uv sync --all-extras && ./verify_pipeline.sh"` |
 
 Negative tests are first-class: PASS means exactly the declared failure occurred.
 
@@ -261,7 +261,7 @@ Negative tests are first-class: PASS means exactly the declared failure occurred
 | `p01_load.py` … `p10_evaluate.py` | the ten phases |
 | `p00_crag_orchestrator.py` | subprocess loop controller |
 | `pyproject.toml` | deps (pydantic ≥2.9, typer ≥0.12.5, rich ≥13.9, qdrant-client ≥1.17, fastembed, sentence-transformers …), `[project.scripts]` `rag-p00`…`rag-p10`, wheel include list |
-| `verify_pipeline.ps1` / `.sh` | live batteries |
+| `verify_pipeline.py` + `.ps1` / `.sh` wrappers | live battery (one core, two thin wrappers) |
 | `tests/` | pytest suites |
 | `README.md` | per-phase walkthrough and the "Pluggability" section |
 | `docs/architecture/phase_rag_pipeline_map.md` (on `main`) | mathematical map (nDCG, RRF, LITM); its Phase 06 section predates `qdrant_collection` |

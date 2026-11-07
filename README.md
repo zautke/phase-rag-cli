@@ -475,7 +475,7 @@ uv run rag-p10
 
 The repository includes a comprehensive 4-stage automated verification battery that exercises the static contracts, per-phase isolation, UNIX pipe integrity, and autonomous CRAG loopback convergence.
 
-Both batteries check every phase's exit code (stderr tail on failure), check all ten pipe stages, assert that `rag-p00` converges `GROUNDED` at its defaults, and write a full transcript to `artifacts/verify_<ps1|sh>_<timestamp>.log`. Switches: `-s/--skip-sync`, `-q/--quiet`, `-h/--help`.
+Both wrappers forward their flags to the single core `uv run python verify_pipeline.py`, which checks every phase's exit code (stderr tail on failure), checks all ten pipe stages, asserts that `rag-p00` goes `REWRITE_REQUIRED` then `GROUNDED` at its defaults (and does not converge at `--crag-threshold 0.92`), and writes a full transcript to `verify_logs/verify_<host>_<timestamp>.log` (gitignored, outside the wiped `artifacts/`). Switches: `-s/--skip-sync`, `-q/--quiet`, `-h/--help`.
 
 ### Running on Windows (PowerShell 7+)
 ```powershell
