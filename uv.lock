@@ -2252,7 +2252,7 @@ requires-dist = [
     { name = "qdrant-client", specifier = ">=1.17.0" },
     { name = "rich", specifier = ">=13.9.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7.0" },
-    { name = "sentence-transformers", specifier = ">=3.3.0" },
+    { name = "sentence-transformers", specifier = ">=6.2.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.4.0" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.4.0", index = "https://download.pytorch.org/whl/cpu" },
     { name = "transformers", specifier = ">=5.0.0" },

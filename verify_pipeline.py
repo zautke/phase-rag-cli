@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -151,7 +152,8 @@ class Battery:
             tree = ast.parse((ROOT / f"{name}.py").read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
-                        and not any(k.arg == "file" for k in node.keywords)):  # file=stderr is fine
+                        and all(k.arg != "file" or ast.unparse(k.value) == "sys.stdout"
+                                for k in node.keywords)):  # file=<anything but sys.stdout> is fine
                     raise Fail(f"print() to stdout in {name}.py:{node.lineno} (corrupts the JSON pipe)")
         import rag_contracts as rc
 
@@ -248,7 +250,8 @@ class Battery:
                           "--qdrant-path", QDRANT, "--crag-threshold", "0.92", "--max-retries", "2"],
                          str(stress), "PhaseCRAGLoopOutput")
         self.check(not out.converged, f"0.92 run converged ({out.final_generation.crag_verdict}); must not")
-        self.say(f"  [OK] 0.92 run did not converge after {out.total_attempts} attempt(s)")
+        self.check(out.total_attempts == 3, f"0.92 run made {out.total_attempts} attempt(s); --max-retries 2 means 3")
+        self.say(f"  [OK] 0.92 run did not converge after {out.total_attempts} attempts (rewrite loop exercised)")
         canon = ART / "00_crag_loop_summary.json"
         out = self.phase("rag-p00 default", "00_default",
                          ["rag-p00", "-c", "-i", str(ART / "05_indexed.json"), "-o", str(canon),
@@ -282,8 +285,9 @@ def main() -> int:
         bat.stage2()
         bat.stage3()
         bat.say("\nALL STATIC REVIEWS, ISOLATED PHASES, NEGATIVES, PIPE AND CRAG LOOP PASSED")
-    except Fail as e:
-        bat.say(f"\n[FAIL] {e}")
+    except Exception as e:  # noqa: BLE001  Fail or anything else (ValidationError, missing uv, bad JSON)
+        bat.say(f"\n[FAIL] {type(e).__name__}: {e}")
+        bat.say(traceback.format_exc(), echo=False)
         code = 1
     metrics["verify_wall_ms"] = round((time.monotonic() - bat.t0) * 1000)
     bat.say(json.dumps(metrics))

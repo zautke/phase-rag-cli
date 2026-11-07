@@ -65,7 +65,8 @@ def test_ast_no_bare_print_in_any_module() -> None:
         tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fpath.name)
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
-                    and not any(k.arg == "file" for k in node.keywords)):  # print(..., file=stderr) is fine
+                    and all(k.arg != "file" or ast.unparse(k.value) == "sys.stdout"
+                            for k in node.keywords)):  # file=<anything but sys.stdout> is fine
                 pytest.fail(f"print() to stdout found in {fpath.name}:{node.lineno}")
 
 
