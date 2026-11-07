@@ -2,7 +2,7 @@
 
 # phase-rag-cli — Pluggable Interface, Public API and Plugin Blueprint (UML SSoT)
 
-**This note is the single source of truth for (1) the pluggable interface, (2) the public API, (3) the plugin implementation blueprint.** Code at branch `feat/minimal-pluggability` (release 0.2.0, see `CHANGELOG.md`). Any change to a contract, CLI flag, engine function or plugin seam updates this note in the same PR. Rendered SVG: `phase-rag-cli-pluggable-interface-uml.svg`; Mermaid source: `phase-rag-cli-pluggable-interface-uml.mmd` (rendered with `@mermaid-js/mermaid-cli@11` on 2026-11-07). The `rag-p04b` GraphRAG stage no longer exists and is not part of the interface.
+**This note is the single source of truth for (1) the pluggable interface, (2) the public API, (3) the plugin implementation blueprint.** Code at branch `feat/minimal-pluggability` (release 0.2.0, see `CHANGELOG.md`). Any change to a contract, CLI flag, engine function or plugin seam updates this note in the same PR. Rendered SVG: `phase-rag-cli-pluggable-interface-uml.svg`; Mermaid source: `phase-rag-cli-pluggable-interface-uml.mmd` (rendered with `@mermaid-js/mermaid-cli@11` on 2026-11-07).
 
 ## Reading guide
 
@@ -39,7 +39,7 @@
 
 ## Deviations
 
-None open. Closed in 0.2.0: reranker monotonicity on the fastembed path (sigmoid always applied), `refs/main` written before verification (now after), unreachable fastembed dense branch (dense is a named plugin), `Usage()` never called (now the `--help` epilog), `rag-p04b` (removed). Open by design: no `--sparse-backend` switch while only one sparse backend exists.
+None open. Closed in 0.2.0: reranker monotonicity on the fastembed path (sigmoid always applied), `refs/main` written before verification (now after), unreachable fastembed dense branch (dense is a named plugin), `Usage()` never called (now the `--help` epilog). Open by design: no `--sparse-backend` switch while only one sparse backend exists.
 
 ## Diagram (Mermaid source)
 ```mermaid
