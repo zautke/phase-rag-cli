@@ -231,20 +231,27 @@ class PhaseCLI(Generic[T_In, T_Out]):
         self.output_model = output_model
         self.default_out_path = default_out_path
 
-    def load_upstream(self, in_file: Path | None) -> T_In:
+    def load_upstream(self, in_file: Path | None, default_file: Path | None = None) -> T_In:
+        """Upstream JSON from --in-file, else stdin (read once), else default_file if given."""
         ensure_utf8_streams()
         if self.input_model is None:
             raise RuntimeError("Phase 01 has no upstream phase.")
-        raw_json: str
-        if in_file and in_file.exists():
+        raw_json = ""
+        if in_file is not None:
+            if not in_file.is_file():
+                raise typer.BadParameter(f"--in-file not found: {in_file}")
             raw_json = in_file.read_text(encoding="utf-8-sig")
-        elif not sys.stdin.isatty():
-            raw_json = sys.stdin.read()
         else:
-            raise typer.BadParameter(
-                f"[{self.phase_title}] Expected upstream JSON via stdin pipe or --in-file"
-            )
+            if not sys.stdin.isatty():
+                raw_json = sys.stdin.read()
+            if not raw_json.strip() and default_file is not None and default_file.is_file():
+                raw_json = default_file.read_text(encoding="utf-8-sig")
         raw_json = raw_json.lstrip("\ufeff").strip()
+        if not raw_json:
+            hint = f", or default {default_file}" if default_file is not None else ""
+            raise typer.BadParameter(
+                f"[{self.phase_title}] Expected upstream JSON via stdin pipe or --in-file{hint}"
+            )
         # Strict runtime type verification of previous phase's output
         return self.input_model.model_validate_json(raw_json)
 

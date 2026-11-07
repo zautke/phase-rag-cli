@@ -266,21 +266,9 @@ def main(
     ] = False,
 ) -> None:
     # 1. Input precedence: explicit --in-file, then piped stdin, then artifacts/05_indexed.json fallback
-    p05_indexed: Phase05IndexedOutput
-    if in_file is not None:
-        if not in_file.exists():
-            raise typer.BadParameter(f"Input file not found: {in_file}")
-        p05_indexed = cli_engine.load_upstream(in_file)
-    elif not sys.stdin.isatty():
-        p05_indexed = cli_engine.load_upstream(None)
-    else:
-        default_in = Path("artifacts/05_indexed.json")
-        if default_in.exists():
-            p05_indexed = cli_engine.load_upstream(default_in)
-        else:
-            raise typer.BadParameter(
-                "Expected upstream JSON via --in-file, stdin pipe, or default artifacts/05_indexed.json"
-            )
+    p05_indexed: Phase05IndexedOutput = cli_engine.load_upstream(
+        in_file, Path("artifacts/05_indexed.json")
+    )
 
     p05_json = p05_indexed.model_dump_json()
 

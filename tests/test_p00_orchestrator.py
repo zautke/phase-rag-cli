@@ -254,3 +254,56 @@ def test_d7_hyde_passage_is_corpus_agnostic(tmp_path: Path) -> None:
     hyde = rc.Phase06QueryPlanOutput.model_validate_json(out.read_text(encoding="utf-8")).hyde_passage
     assert "boiling water" in hyde
     assert not any(w in hyde.lower() for w in (*DOMAIN_WORDS, "hybrid", "rrf", "reciprocal"))
+
+
+# --- D9: --in-file must exist; stdin read once; empty stdin falls back to the default file ------
+def test_d9_missing_in_file_is_a_usage_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import p06_query
+
+    h = Harness(monkeypatch, tmp_path)
+    missing = str(tmp_path / "nope.json")
+    for app in (p00.app, p06_query.app):
+        res = CliRunner().invoke(app, ["-i", missing, "-s"], input=h.f05.read_text(encoding="utf-8"))
+        assert res.exit_code == 2, res.output
+        assert "not found" in res.output.lower()
+    assert h.calls == []  # stdin was not used as a silent substitute
+
+
+def test_d9_empty_stdin_falls_back_to_default_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    h = Harness(monkeypatch, tmp_path)
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "artifacts" / "05_indexed.json").write_text(h.f05.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    res = CliRunner().invoke(p00.app, ["-s", "-r", "0", "-o", str(tmp_path / "o" / "00.json")], input="")
+    assert res.exit_code == 0, res.output
+    assert h.count("p06_query.py") == 1
+
+
+def test_d9_empty_stdin_without_default_is_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    h = Harness(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    res = CliRunner().invoke(p00.app, ["-s", "-o", str(tmp_path / "o.json")], input="")
+    assert res.exit_code == 2, res.output
+    assert h.calls == []
+
+
+def test_d9_piped_stdin_is_read_once_and_used(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    h = Harness(monkeypatch, tmp_path)
+    res = CliRunner().invoke(
+        p00.app,
+        ["-s", "-r", "0", "-o", str(tmp_path / "o" / "00.json")],
+        input=h.f05.read_text(encoding="utf-8"),
+    )
+    assert res.exit_code == 0, res.output
+    assert h.count("p06_query.py") == 1
+
+
+def test_d9_other_phases_empty_stdin_is_a_usage_error(tmp_path: Path) -> None:
+    import p06_query
+
+    res = CliRunner().invoke(p06_query.app, ["-o", str(tmp_path / "o.json")], input="")
+    assert res.exit_code == 2, res.output
