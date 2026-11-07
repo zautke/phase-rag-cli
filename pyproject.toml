@@ -16,6 +16,9 @@ dependencies = [
     "fastembed>=0.6.0",
     "sentence-transformers>=3.3.0",
     "einops>=0.8.0",
+    "huggingface-hub>=0.26.0",
+    "transformers>=4.46.0",
+    "torch>=2.4.0",  # pulled in by sentence-transformers; direct so [tool.uv.sources] below applies
 ]
 
 [project.optional-dependencies]
@@ -60,6 +63,15 @@ include = [
 [tool.uv]
 managed = true
 package = true
+
+# Linux gets CPU-only torch (no ~GB of CUDA wheels); Windows/macOS keep resolving torch from PyPI.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.ruff]
 line-length = 100
