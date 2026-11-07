@@ -62,4 +62,4 @@ OBJECTIVE: Coordinate 4 Specialty Subagents to implement, type-check, and live-v
      (b) Persisted JSON artifact on disk (`artifacts/0X_*.json`),
      (c) Validated Pydantic round-trip via `model_validate_json()` on `stdout`.
   3. Execute full 10-phase linear UNIX pipe battery (`rag-p01 | ... | rag-p10`).
-  4. Execute cyclic CRAG loopback battery (`rag-p00 --crag-threshold 0.92`) verifying multi-attempt query rewriting.
+  4. Execute cyclic CRAG loopback battery (`rag-p00 --crag-threshold 0.99`; 0.92 now converges at attempt 3 after the anchor rewrite) verifying multi-attempt query rewriting.

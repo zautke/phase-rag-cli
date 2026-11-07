@@ -58,7 +58,8 @@ Runs the 4-stage verification battery (cwd-independent; PASS = exit 0):
            stdout == disk validates with the phase model; negatives (strategy, dense backend,
            missing --in-file) must exit 2 with empty stdout
   Stage 2: full 10-phase `uv run` pipe via Popen chain, every exit checked
-  Stage 3: rag-p00 CRAG loop: --crag-threshold 0.92 must NOT converge; default run must go
+  Stage 3: rag-p00 CRAG loop: --crag-threshold 0.99 must NOT converge (3 REWRITE_REQUIRED attempts,
+           3 distinct queries); default run must go
            REWRITE_REQUIRED -> GROUNDED
 
   -q, --quiet       Do not echo captured phase stderr (always kept in the log, shown on failure)
@@ -245,13 +246,12 @@ class Battery:
     def stage3(self) -> None:
         self.banner("STAGE 3: CRAG LOOPBACK")
         stress = ART / "crag_stress" / "00_crag_stress.json"
-        out = self.phase("rag-p00 stress (-t 0.92)", "00_stress",
+        out = self.phase("rag-p00 stress (-t 0.99)", "00_stress",
                          ["rag-p00", "-c", "-i", str(ART / "05_indexed.json"), "-o", str(stress),
-                          "--qdrant-path", QDRANT, "--crag-threshold", "0.92", "--max-retries", "2"],
+                          "--qdrant-path", QDRANT, "--crag-threshold", "0.99", "--max-retries", "2"],
                          str(stress), "PhaseCRAGLoopOutput")
-        self.check(not out.converged, f"0.92 run converged ({out.final_generation.crag_verdict}); must not")
-        self.check(out.total_attempts == 3, f"0.92 run made {out.total_attempts} attempt(s); --max-retries 2 means 3")
-        self.say(f"  [OK] 0.92 run did not converge after {out.total_attempts} attempts (rewrite loop exercised)")
+        self.check(not (bad := stress_failures(out)), "; ".join(bad))
+        self.say(f"  [OK] 0.99 run never converged: {out.total_attempts} REWRITE_REQUIRED attempts, distinct queries (rewrite proven)")
         canon = ART / "00_crag_loop_summary.json"
         out = self.phase("rag-p00 default", "00_default",
                          ["rag-p00", "-c", "-i", str(ART / "05_indexed.json"), "-o", str(canon),
@@ -261,6 +261,22 @@ class Battery:
         self.check(first == "REWRITE_REQUIRED" and verdict == "GROUNDED" and out.converged,
                    f"default run: first={first} final={verdict} converged={out.converged} confidence {trail}")
         self.say(f"  [OK] default run REWRITE_REQUIRED -> GROUNDED in {out.total_attempts} attempt(s) | {trail}")
+
+
+def stress_failures(out) -> list[str]:
+    """Stage 3 stress assertion (-t 0.99, --max-retries 2): never converges, 3 attempts, all REWRITE_REQUIRED, queries pairwise distinct."""
+    hist = out.attempts_history
+    bad = []
+    if out.converged:
+        bad.append(f"0.99 run converged ({out.final_generation.crag_verdict}); must not")
+    if out.total_attempts != 3:
+        bad.append(f"0.99 run made {out.total_attempts} attempt(s); --max-retries 2 means 3")
+    if any(r.crag_verdict != "REWRITE_REQUIRED" for r in hist):
+        bad.append(f"0.99 run verdicts {[r.crag_verdict for r in hist]}; all must be REWRITE_REQUIRED")
+    queries = [r.query_used for r in hist]
+    if len(set(queries)) != len(queries):
+        bad.append(f"0.99 run query strings not pairwise distinct (rewrite not proven): {queries}")
+    return bad
 
 
 def main() -> int:

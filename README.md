@@ -123,7 +123,7 @@ pwsh -File .\verify_pipeline.ps1 [-s] [-q]      # live battery, Windows
 ./verify_pipeline.sh [-s] [-q]                  # live battery, Linux/macOS
 ```
 
-Both wrappers call the single core `verify_pipeline.py`: Stage 0 static audit (no stdout `print()`, strict schemas, contract chain), Stage 1 each phase isolated (exit, stderr, artifact, stdout == disk) plus declared negatives, Stage 2 the full 10-phase pipe, Stage 3 the CRAG loop (must not converge at `--crag-threshold 0.92`; must go `REWRITE_REQUIRED` then `GROUNDED` at defaults). Transcripts land in `verify_logs/` (gitignored). On a Windows host run the bash battery on real Linux:
+Both wrappers call the single core `verify_pipeline.py`: Stage 0 static audit (no stdout `print()`, strict schemas, contract chain), Stage 1 each phase isolated (exit, stderr, artifact, stdout == disk) plus declared negatives, Stage 2 the full 10-phase pipe, Stage 3 the CRAG loop (must not converge at `--crag-threshold 0.99` with three distinct REWRITE_REQUIRED attempts, since the anchor rewrite now lets 0.92 converge at attempt 3; must go `REWRITE_REQUIRED` then `GROUNDED` at defaults). Transcripts land in `verify_logs/` (gitignored). On a Windows host run the bash battery on real Linux:
 
 ```powershell
 wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=`$HOME/.local/bin:`$PATH UV_PROJECT_ENVIRONMENT=`$HOME/.venvs/phase-rag; cd /mnt/c/<path-to-repo> && uv sync --all-extras && ./verify_pipeline.sh -s"

@@ -16,6 +16,7 @@
 - `Phase06QueryPlanOutput.qdrant_collection` replaces the embedded `index_snapshot`.
 - CRAG threshold has a single source (`RAG_CRAG_THRESHOLD`, 0.65); p00 forwards only explicitly set options.
 - p00 `--max-retries N` means N retries after the first attempt (default 2); child stderr is inherited; rewrites use anchors actually present in the corpus and stop when anchors are exhausted; the demo-corpus rewrite fallbacks are gone.
+- Battery Stage 3 stress run uses `--crag-threshold 0.99` (0.92 converges at attempt 3 once the anchor rewrite improved) and asserts not converged, 3 attempts, all REWRITE_REQUIRED, pairwise-distinct query strings.
 - P08 emits `rank="N"` on each context; P10 computes nDCG in rank order.
 - Every CLI shows `Usage()` as its `--help` epilog; a missing `--in-file` is a usage error and stdin is read once.
 
