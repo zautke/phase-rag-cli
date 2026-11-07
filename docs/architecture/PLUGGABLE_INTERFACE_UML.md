@@ -2,13 +2,13 @@
 
 # phase-rag-cli — Pluggable Interface, Public API and Plugin Blueprint (UML SSoT)
 
-**This note is the single source of truth for (1) the pluggable interface, (2) the public API, (3) the plugin implementation blueprint.** Code at `fix/battery-hardening@4e81d70` (candidate trunk). Any change to a contract, CLI flag, engine function or plugin seam updates this note in the same PR. Rendered SVG: `phase-rag-cli-pluggable-interface-uml.svg`; Mermaid source: `phase-rag-cli-pluggable-interface-uml.mmd`. Validated with Mermaid Chart on 2026-11-07 (`valid=true`, `classDiagram`).
+**This note is the single source of truth for (1) the pluggable interface, (2) the public API, (3) the plugin implementation blueprint.** Code at branch `feat/minimal-pluggability` (release 0.2.0, see `CHANGELOG.md`). Any change to a contract, CLI flag, engine function or plugin seam updates this note in the same PR. Rendered SVG: `phase-rag-cli-pluggable-interface-uml.svg`; Mermaid source: `phase-rag-cli-pluggable-interface-uml.mmd` (rendered with `@mermaid-js/mermaid-cli@11` on 2026-11-07). The `rag-p04b` GraphRAG stage no longer exists and is not part of the interface.
 
 ## Reading guide
 
 - **ContractKernel**: `BasePhasePayload` (strict, extra=forbid, `run_id`/`phase_name`/`timestamp`) and the generic `PhaseCLI[T_In, T_Out]` whose `load_upstream` / `emit` pair is the only I/O path a phase may use. `err_console` is the only console and it is stderr.
-- **WireSchemas / ItemModels**: the 11 `BasePhasePayload` subclasses and their item models. These are the public wire format of every hop; the pipe carries exactly one of them per hop.
-- **PluginInterfaces**: the five seams a plugin can implement. `IExecutableStage` is the primary one: *any executable that honours it is a plugin, with zero framework code*. `IStrategy` is the in-phase seam (`--strategy`). `IEmbedderBackend`, `IRerankerBackend`, `IModelFetcher` are the engine seams. `IEntryPointRegistry` is deferred until a third-party strategy exists.
+- **WireSchemas / ItemModels**: the 11 `BasePhasePayload` subclasses and their item models. These are the public wire format of every hop; the pipe carries exactly one of them per hop. `Phase05IndexedOutput` and `Phase06QueryPlanOutput` carry `dense_backend`, `dense_model`, `sparse_model` so retrieval always encodes queries like the indexed corpus.
+- **PluginInterfaces**: the four seams a plugin can implement. (1) `IExecutableStage`: *any executable that honours it is a plugin, with zero framework code*. (2) `IStrategy`: the in-phase chunker seam (`rag-p04 --strategy`). (3) `IDenseBackend` / `ISparseBackend`: embedder registries in `hybrid_engine.py` (`rag-p05 -b/-m/-s`). (4) `IRerankerBackend`: reranker registry (`rag-p08 -b/-m`). `IModelFetcher` is the shared download contract. `IEntryPointRegistry` stays deferred until a third-party strategy exists.
 - **PublicCLI**: the 11 console scripts in `pyproject.toml [project.scripts]` with their in/out contract and every option (all short+long). `rag-p00` drives P06..P09 as subprocesses and finishes with P10.
 - **Engine**: the public functions and constants of `hybrid_engine.py`, `model_fetch.py`, `chunkers.py`.
 - Edges: `..|>` realizes, `*--` composes, `..>` depends, `-->` the pipe hop with the payload type as label.
@@ -17,15 +17,15 @@
 
 **A. External stage (preferred; language-agnostic).** Read Phase[N-1] JSON from stdin or `--in-file`; validate against the published model (`strict=True, extra="forbid"`; a Python plugin imports `rag_contracts`); compute; log only to stderr; write Phase[N] JSON to `--out-file` and the identical bytes to stdout; exit 0, non-zero on any failure. Install: `rag-pN-1 | my-stage | rag-pN+1`. No registration, no framework, no async.
 
-**B. In-phase strategy.** One plain function with the published signature (`Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]`), added to the phase's `REGISTRY` dict and selected by `--strategy/-s`. Resolve the name before `load_upstream` so an unknown name exits 2 with `Known: …` on stderr and an empty stdout. The output payload records the chosen name (`chunk_strategy`). Third-party discovery (`importlib.metadata.entry_points(group="rag.chunkers")`, each entry point an import-cheap `register()` function as in LightRAG `lightrag.chunkers` and pluggy `load_setuptools_entrypoints`) is deferred until a third-party strategy exists.
+**B. In-phase strategy.** One plain function with the published signature (`Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]`), added to `CHUNKERS` and selected by `--strategy/-s`. The name is resolved before `load_upstream`, so an unknown name exits 2 with `Known: ...` on stderr and an empty stdout. The output payload records the chosen name (`chunk_strategy`). Third-party discovery (`importlib.metadata.entry_points(group="rag.chunkers")`, each entry point an import-cheap `register()` function as in LightRAG `lightrag.chunkers` and pluggy `load_setuptools_entrypoints`) is deferred until a third-party strategy exists.
 
-**C. Engine backends.** Embedders and rerankers are selected by CLI flag (`--backend/-b`, `--model/-m`), load lazily on first call (singleton), fetch weights through `IModelFetcher` (aria2c, announced, progress on stderr, sizes verified, HF cache layout shared by sentence-transformers and fastembed), and must return calibrated, monotonic scores in [0,1].
+**C. Engine backends (dense, sparse, rerank).** Each is a module-level dict `name -> loader` in `hybrid_engine.py` (`DENSE_BACKENDS`, `SPARSE_BACKENDS`, `RERANK_BACKENDS`); registering a plugin is one dict line. Dense: `loader(model) -> (embed(texts, query), vector size)`, selected by `rag-p05 -b NAME -m MODEL`; sparse: `loader(model) -> embed(texts)`, model selected by `rag-p05 -s`; rerank: `scorer(query, passages, model, batch_size) -> scores in [0,1]`, selected by `rag-p08 -b NAME -m MODEL`. Loaders run lazily on first call (cached singleton), fetch weights through `IModelFetcher` (aria2c, announced, progress on stderr, sizes verified, HF cache layout shared by sentence-transformers and fastembed), and rerank scores must be calibrated and monotonic in [0,1]. An unknown name raises `ValueError("Unknown <kind> backend '<name>'. Known: ...")`, which every CLI reports as exit 2. The dense choice is written by P05, copied by P06 and read by P07; changing it means re-indexing.
 
 ## Invariants every plugin must keep
 
 1. Tri-Plex I/O: stdout = payload JSON only; stderr = telemetry; disk = `--out-file`.
-2. Strict contracts: `ConfigDict(strict=True, extra="forbid")` on every payload; new fields carry defaults so earlier producers still validate.
-3. CLI law: `#!/usr/bin/env python`, `Usage()`, every option short+long, no positional args.
+2. Strict contracts: `ConfigDict(strict=True, extra="forbid")` on every payload; new fields carry defaults so earlier producers still validate (the P05/P06 model-name fields are the one deliberate exception: pre-0.2.0 artifacts are rejected and must be regenerated).
+3. CLI law: `#!/usr/bin/env python`, `Usage()` (shown as the `--help` epilog), every option short+long, no positional args.
 4. UTF-8 without BOM on disk; BOM tolerated on input.
 5. Config SSoT: defaults come from `.env` via typer `envvar=`, never hard-coded twice.
 
@@ -37,16 +37,13 @@
 - stdio plugin protocols (Nushell plugin protocol; codex-web issue #194 `CommandPlugin` stdin/stdout JSON with plugin id/version envelope): confirm stdout-reserved-for-protocol, stderr-for-logs. phase-rag-cli already carries `run_id`/`phase_name`/`timestamp` per payload; a `producer` field is the optional next step if lineage is ever needed.
 - Sources: https://github.com/HKUDS/LightRAG ; https://www.nushell.sh/contributor-book/plugins.html ; https://github.com/garnser/codex-web/issues/194 ; https://github.com/UrBaneee/rag-framework ; https://github.com/DevilsDev/rag-pipeline-utils ; https://dev.to/playfulprogramming/rag-designing-the-cli-interface-17g5
 
-## Known deviations from this SSoT at 4e81d70 (tracked in the 2026-11-07 audits)
+## Deviations
 
-- `IRerankerBackend` monotonicity violated on the fastembed path (`hybrid_engine.py:232`) — D1.
-- `IModelFetcher` writes `refs/main` before verification (`model_fetch.py:77`) — D4.
-- Dense embedder: fastembed branch unreachable; always sentence-transformers (`hybrid_engine.py:79-104`) — spec decision pending.
-- `Usage()` defined in 12 CLIs, called nowhere — D16.
+None open. Closed in 0.2.0: reranker monotonicity on the fastembed path (sigmoid always applied), `refs/main` written before verification (now after), unreachable fastembed dense branch (dense is a named plugin), `Usage()` never called (now the `--help` epilog), `rag-p04b` (removed). Open by design: no `--sparse-backend` switch while only one sparse backend exists.
 
 ## Diagram (Mermaid source)
-
-```mermaidclassDiagram
+```mermaid
+classDiagram
 direction LR
 
 namespace ContractKernel {
@@ -77,8 +74,8 @@ namespace WireSchemas {
   class Phase02MarkdownOutput { +documents: list~MarkdownDocument~ }
   class Phase03ParsedOutput { +sections: list~ParsedSection~ }
   class Phase04ChunkedOutput { +chunks: list~DocumentChunk~ ; +chunk_strategy: str = sliding_window }
-  class Phase05IndexedOutput { +qdrant_collection: str ; +indexed_records: list~EnrichedIndexedChunk~ }
-  class Phase06QueryPlanOutput { +original_query: str ; +route: str ; +sub_queries: list~str~ ; +hyde_passage: str ; +metadata_filters: dict ; +qdrant_collection: str }
+  class Phase05IndexedOutput { +qdrant_collection: str ; +dense_backend: str ; +dense_model: str ; +sparse_model: str ; +indexed_records: list~EnrichedIndexedChunk~ }
+  class Phase06QueryPlanOutput { +original_query: str ; +route: str ; +sub_queries: list~str~ ; +hyde_passage: str ; +metadata_filters: dict ; +qdrant_collection: str ; +dense_backend: str ; +dense_model: str ; +sparse_model: str }
   class Phase07RetrievedOutput { +query_plan: Phase06QueryPlanOutput ; +candidates: list~RetrievedCandidate~ }
   class Phase08RerankedOutput { +original_query: str ; +xml_context_block: str ; +top_contexts: list~RerankedContextItem~ }
   class Phase09GenerationOutput { +original_query: str ; +crag_verdict: GROUNDED or REWRITE_REQUIRED ; +grounded_confidence: float ; +synthesized_answer: str ; +citations: list~str~ ; +xml_context_block: str }
@@ -142,24 +139,33 @@ namespace PluginInterfaces {
     selected by --strategy/-s BEFORE load_upstream ; exit 2 on unknown
     output model carries the chosen name e.g. chunk_strategy
   }
-  class IEmbedderBackend {
+  class IDenseBackend {
     <<interface>>
-    +embed_dense_batch(texts) list of 1024-d L2-normalized vectors
-    +embed_sparse_batch(texts) list of (indices, values)
-    warm-up = first call, singleton, lazy
+    SEAM 3a: DENSE_BACKENDS dict name to loader ; selected by rag-p05 --dense-backend/-b --dense-model/-m
+    +loader(model_name) embed_fn and vector size ; embed_fn takes texts and query flag
+    built in: sentence_transformers default, fastembed
+    lazy singleton per backend and model ; vector size sets the Qdrant dense dimension
+    choice recorded in Phase05 and copied by Phase06 ; P07 encodes the query with the same models
+  }
+  class ISparseBackend {
+    <<interface>>
+    SEAM 3b: SPARSE_BACKENDS dict name to loader ; model selected by rag-p05 --sparse-model/-s
+    +loader(model_name) embed_fn ; embed_fn takes texts and returns indices and values per text
+    built in: fastembed only ; no --sparse-backend switch yet
   }
   class IRerankerBackend {
     <<interface>>
-    +rerank_passages_batch(query, passages, model_name, backend, batch_size) list~float~ in [0,1]
-    backend: transformers | fastembed ; selected by --backend/-b --model/-m
-    MUST be monotonic in raw score ; D1 fix: sigmoid always on fastembed path
+    SEAM 4: RERANK_BACKENDS dict name to scorer ; selected by rag-p08 --backend/-b --model/-m
+    +scorer(query, passages, model_name, batch_size) list~float~ in [0,1]
+    built in: sentence_transformers default, fastembed
+    MUST be monotonic in raw score ; sigmoid on raw logits, clip bounded heads
   }
   class IModelFetcher {
     <<interface>>
     +ensure_model(repo_id, cache_dir, include, exclude) Path
-    aria2c -c -x8 -s8, announced, progress on stderr, sizes verified
+    aria2c resumable 8 connections, announced, progress on stderr, sizes verified
     HF cache layout models--org--name/snapshots/sha shared by ST and fastembed
-    refs/main written only after verification ; D4 fix
+    refs/main and .complete written only after size verification ; aria2c mandatory
   }
   class IEntryPointRegistry {
     <<interface>>
@@ -174,32 +180,35 @@ namespace PublicCLI {
   class rag_p02 { Phase01 to Phase02 ; HTML to Markdown }
   class rag_p03 { Phase02 to Phase03 ; AST header paths }
   class rag_p04 { Phase03 to Phase04 ; --max-words/-m --overlap/-v --strategy/-s }
-  class rag_p05 { Phase04 to Phase05 ; --collection/-c --qdrant-url/-u --qdrant-path/-p --recreate/-r or --append/-a }
-  class rag_p06 { Phase05 to Phase06 ; --query/-q ; HyDE + decomposition }
+  class rag_p05 { Phase04 to Phase05 ; --collection/-c --qdrant-url/-u --qdrant-path/-p --dense-backend/-b --dense-model/-m --sparse-model/-s --recreate/-r or --append/-a }
+  class rag_p06 { Phase05 to Phase06 ; --query/-q ; HyDE + decomposition ; copies collection and model names }
   class rag_p07 { Phase06 to Phase07 ; --prefetch-limit/-l --rrf-k/-k --dense-weight/-d --sparse-weight/-s --top-k/-t }
-  class rag_p08 { Phase07 to Phase08 ; --backend/-b --model/-m --top-n/-n --batch-size/-B ; LitM order, parent dedup }
+  class rag_p08 { Phase07 to Phase08 ; --backend/-b --model/-m --top-n/-n --batch-size/-s ; LitM order, parent dedup }
   class rag_p09 { Phase08 to Phase09 ; --crag-threshold/-t ; verdict gate }
   class rag_p10 { Phase09 to Phase10 ; RAG Triad metrics }
-  class rag_p00 { Phase05 to PhaseCRAGLoopOutput ; subprocess loop P06..P09 per attempt then P10 ; --max-retries/-r --crag-threshold/-t plus forwarded P07 and P08 knobs }
+  class rag_p00 { Phase05 to PhaseCRAGLoopOutput ; subprocess loop P06..P09 per attempt then P10 ; --max-retries/-r (retries after the first attempt) --crag-threshold/-t --rerank-backend/-b --rerank-model/-m plus forwarded P07 and P08 knobs }
 }
 
 namespace Engine {
   class hybrid_engine {
     <<module>>
-    DENSE_MODEL_NAME = jinaai/jina-embeddings-v3
-    SPARSE_MODEL_NAME = prithivida/Splade_PP_en_v1
-    DENSE_VECTOR_NAME = jina-dense ; SPARSE_VECTOR_NAME = splade-sparse ; DENSE_DIM = 1024
-    DEFAULT_RERANK_MODEL = BAAI/bge-reranker-v2-m3
+    DENSE_BACKENDS ; SPARSE_BACKENDS ; RERANK_BACKENDS : name to loader dicts
+    DEFAULT_DENSE_BACKEND = sentence_transformers ; DEFAULT_DENSE_MODEL = jinaai/jina-embeddings-v3
+    DEFAULT_SPARSE_MODEL = prithivida/Splade_PP_en_v1 ; DEFAULT_QDRANT_PATH = ./qdrant_storage
+    DEFAULT_RERANK_BACKEND = sentence_transformers ; DEFAULT_RERANK_MODEL = BAAI/bge-reranker-v2-m3
     DEFAULT_FASTEMBED_RERANK_MODEL = jinaai/jina-reranker-v2-base-multilingual
-    +get_dense_embedder() model, backend
-    +get_sparse_embedder() SparseTextEmbedding
-    +embed_dense_batch(texts)
-    +embed_sparse_batch(texts)
+    DENSE_VECTOR_NAME = jina-dense ; SPARSE_VECTOR_NAME = splade-sparse
+    +resolve_backend(registry, name, kind) raises ValueError Unknown backend, Known: a, b
+    +get_dense_embedder(backend, model_name) embed_fn, size
+    +embed_dense_batch(texts, backend, model_name, query)
+    +get_sparse_embedder(model_name)
+    +embed_sparse_batch(texts, model_name)
     +get_qdrant_client(url, path) QdrantClient
-    +ensure_hybrid_collection(client, name, recreate)
+    +ensure_hybrid_collection(client, name, dense_dim, recreate)
     +deterministic_point_uuid(chunk_id) str UUIDv5 NAMESPACE_DNS
     +resolve_rerank_model(model, backend) str
     +rerank_passages_batch(query, passages, model, backend, batch_size)
+    +prefetch_st(model_name)
   }
   class model_fetch {
     <<module>>
@@ -227,7 +236,8 @@ rag_p09 ..|> IExecutableStage
 rag_p10 ..|> IExecutableStage
 rag_p00 ..|> IExecutableStage
 chunkers ..|> IStrategy
-hybrid_engine ..|> IEmbedderBackend
+hybrid_engine ..|> IDenseBackend
+hybrid_engine ..|> ISparseBackend
 hybrid_engine ..|> IRerankerBackend
 model_fetch ..|> IModelFetcher
 IEntryPointRegistry ..> IStrategy : populates REGISTRY (deferred)
@@ -235,9 +245,9 @@ IExecutableStage o-- PhaseCLI : composes one cli_engine
 PhaseCLI ..> BasePhasePayload : validates T_In / T_Out
 PhaseCLI ..> err_console : telemetry only
 rag_p04 ..> chunkers : --strategy
-rag_p05 ..> hybrid_engine
-rag_p07 ..> hybrid_engine
-rag_p08 ..> hybrid_engine
+rag_p05 ..> hybrid_engine : --dense-backend --sparse-model
+rag_p07 ..> hybrid_engine : models from the Phase06 payload
+rag_p08 ..> hybrid_engine : --backend
 hybrid_engine ..> model_fetch : prefetch before load
 rag_p00 ..> rag_p06 : subprocess
 rag_p00 ..> rag_p07 : subprocess
@@ -264,12 +274,17 @@ note for IStrategy "IN-PHASE STRATEGY BLUEPRINT:
 1. def my_strategy(section, max_words, overlap) -> list[DocumentChunk]
 2. CHUNKERS['my_strategy'] = my_strategy (or entry point in group rag.chunkers once it lands)
 3. rag-p04 -s my_strategy ; output.chunk_strategy == 'my_strategy'"
+note for IDenseBackend "ENGINE BACKEND BLUEPRINT (seams 3a, 3b, 4):
+1. Write the loader or scorer in hybrid_engine.py; fetch weights through prefetch_st / prefetch_fastembed / ensure_model.
+2. Register one line: DENSE_BACKENDS['my_backend'] = loader (SPARSE_BACKENDS / RERANK_BACKENDS likewise).
+3. rag-p05 -b my_backend -m org/model ; the choice travels in Phase05 and Phase06 so P07 encodes queries the same way."
 ```
 
 ## Relations
 
 - SPECIFIES :: [[projects/phase-rag-cli/phase-rag-cli-master-manual]]
 - DERIVED_FROM :: [[projects/phase-rag-cli/plugin-evolution-audit-and-minimal-pluggability-plan-2026-11-02]]
+- RELATES_TO :: [[projects/phase-rag-cli/archive/rag-plugin-evolution-architecture-rejected-proposal-2026-11-02]]
 - RELATES_TO :: [[projects/phase-rag-cli/audits/audit-2026-11-07-lead-synthesis-simplify-streamline-fix]]
 - RELATES_TO :: [[projects/phase-rag-cli/audits/audit-2026-11-07-architecture-and-simplification-arch-audit-opus]]
 - RELATES_TO :: [[projects/phase-rag-cli/audits/audit-2026-11-07-code-correctness-code-audit-opus]]
