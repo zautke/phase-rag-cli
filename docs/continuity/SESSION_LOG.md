@@ -1,5 +1,13 @@
 # SESSION LOG
 
+## 2026-11-07 15:46 MST — Release 0.2.0 fix wave, live gate Waves A-D, final fix wave, handoff
+- Audit synthesis (kb lead, defects D1-D17) became SDD plan `.superpowers/sdd/release-1.0.0/plan.md`; user decisions: plugins everywhere, delete p04b (keep `--strategy`), consolidate batteries, evict docs to kb.
+- Tasks 1-6 executed by sonnet implementers with per-task review (T4 1 fix round, T5 1, T6 2): `cdfa6dc`..`9f23a93`. PR #5 folded into the branch at `198f343` (shows MERGED on GitHub); PR #4 open to `development`; PR #3 pending close.
+- Pre-flight: installed aria2 1.37.0 in WSL via `wsl -u root`; main checkout left alone (concurrent Codex sessions).
+- Live gate by live-qa agents: Wave A RUN #56-#59 found D-A1 (CRLF); fixed `4057648` (RUN #60-#62). Wave B #63-#71 all PASS incl. first live fastembed jina (2.29 GB, RAM low-water 2.8 MB). Wave C #72-#74 PASS. Wave D: p00 #75 PASS, stress #76 PARTIAL, pytest `-m ""` #77 PASS (115), batteries #78/#79 FAIL on stale Stage 3 assertion (D-D1).
+- Final fix wave `6c08e23`..`bf6c445`: D-D1, D-B1, D-C1, `RAG_RERANK_*` env keys, byte-identical tests. `50c6467`: real corpus + continuity restored. `62b0dc7`: EXE001 executable bits.
+- User directives: sonnet teams for kb and demos, real corpus first, per-phase demo signoff, nobody done until the user has seen it run. READY TO DEMO sent for p01-p10.
+- State at handoff: reviewer, battery re-runs, real-corpus run and kb recording in flight; CHANGELOG `Verification:` pending; next = signoff, opus whole-branch review, close #3, bot reviews on #4, merge 0.2.0, release 1.0.0 to main + tag, cleanup, branch protection. See `CURRENT_TASK_STATE.md`.
 ## 2026-11-02 19:20 MDT — Comprehensive Architecture Map, Dual Agent Audit & KB Synchronization
 - Drafted complete, rigorous 10-phase architecture and mathematical reference document at `docs/architecture/phase_rag_pipeline_map.md` (919 lines).
 - Dispatched two specialized review subagents:

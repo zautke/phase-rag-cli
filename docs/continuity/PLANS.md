@@ -1,48 +1,38 @@
 # PLANS
 
-## Active — SOTA 10-Phase Hybrid RAG CLI Suite & CRAG Loop Controller
+## Active — Release 0.2.0 (development) then 1.0.0 (main): minimal pluggability + audit fix wave
 
 ### Goals
-Deliver a production-grade, 10-phase UNIX-piped Hybrid RAG CLI toolsuite with an autonomous Corrective RAG (CRAG) loop controller executed via `uv`. The architecture enforces a strict Tri-Plex I/O contract (`stdout` JSON payload, `stderr` Rich telemetry, `disk` atomic artifact), named dense/sparse vectors in Qdrant, and cross-encoder validation with RAG Triad evaluation.
+10-phase UNIX-piped Hybrid RAG CLI suite + P00 CRAG controller, Tri-Plex I/O (`stdout` JSON, `stderr` Rich, `disk` artifact), strict Pydantic contracts, with every backend a named plugin and every defect D1-D17 of the 2026-11-07 audit fixed and live-proven. Spec: `AGENTS.md`; plan: `.superpowers/sdd/release-1.0.0/plan.md`; ledger: `.superpowers/sdd/release-1.0.0/progress.md`; kb audit: `projects/phase-rag-cli/audits/audit-2026-11-07-lead-synthesis-simplify-streamline-fix`.
 
-### Current Facts & Milestones
-- **Architecture Spec:** Defined in `AGENTS.md` and detailed SDD in `docs/plans/2026-10-31-hybrid-rag-cli-plan.md`.
-- **Phase 01–04 (Core Ingestion):**
-  - `p01_load.py`: Disambiguates document stems (`guide_md`, `guide_html`), assigns proper MIME types.
-  - `p02_markdown.py`: Normalizes HTML markup to clean Markdown using BeautifulSoup.
-  - `p03_parse.py`: Extracts Markdown AST header paths.
-  - `p04_chunk.py`: Sliding-window semantic chunker preserving `parent_markdown`.
-- **Phases 05 & 07 (Hybrid Engine & Vector DB):**
-  - `hybrid_engine.py`: FastEmbed singleton loaders for Jina-v3 dense (1024-d, INT8 scalar quantization) and SPLADE sparse embeddings; dual cross-encoder rerankers; Qdrant embedded client fallback at `./qdrant_storage`.
-  - `p05_index.py`: Live batch embedding upsert with deterministic UUIDv5 point IDs.
-  - `p07_retrieve.py`: Prefetch + Reciprocal Rank Fusion (RRF) query points execution on Qdrant.
-- **Phases 06, 08–10 (Rerank, CRAG & Evaluation):**
-  - `p06_query.py`: Multi-clause query decomposition and HyDE passage expansion.
-  - `p08_rerank.py`: Cross-Encoder reranking, section deduplication, Lost-in-the-Middle context assembly.
-  - `p09_generate.py`: CRAG confidence decision gate, synthesized grounded answer with citations.
-  - `p10_evaluate.py`: RAG Triad metrics (nDCG@k, context precision, faithfulness, answer relevance).
-- **P00 CRAG Orchestrator:**
-  - `p00_crag_orchestrator.py`: Multi-attempt query rewriting loop controller with disk checkpointing.
-- **Verification & Releases:**
-  - 17 unit and integration tests passing in `tests/`.
-  - Automated smoke test suites in `verify_pipeline.ps1` and `verify_pipeline.sh`.
-  - PR #1 (`feat/hybrid-rag-cli` -> `development`) merged (`7aab409`).
-  - PR #2 (`development` -> `main`) merged (`7437c3a`).
-  - `main` branch initialized, merged, and configured as default GitHub branch (`origin/main`).
-- **Wave 7: Formal Architecture & Mathematical Blueprint (Complete):**
-  - Authored comprehensive 919-line reference: [`docs/architecture/phase_rag_pipeline_map.md`](file:///C:/Users/me/dev/phase-rag-cli/docs/architecture/phase_rag_pipeline_map.md).
-  - Dual review subagent audit: Math & Algorithmic Auditor (`7a043376`) + Systems & Pipeline Auditor (`b630bab9`).
-  - Formulated closed-form Lost-in-the-Middle permutation $\pi(r)$, guarded nDCG@k, SPLADE++ neural lexical expansion, exact chunk count $K = \lceil T/S \rceil$, and dual-template progressive query rewriting.
-  - Synchronized architectural note to `master-kb` (`basic-memory`) at `projects/phase-rag-cli/Phase RAG Pipeline Complete Architectural and Mathematical Map.md`.
-  - Codebase re-indexed in `jcodemunch` (138 symbols across 22 files).
-  - Pushed to `origin/main` at commit `14e36ef`.
+### Plan tasks (base 198f343, branch `feat/minimal-pluggability`, PR #4)
+| # | Task | Status |
+|---|---|---|
+| 1 | Delete `rag-p04b`; D10 overlap bounds | DONE `cdfa6dc`, `e3041af` |
+| 2 | Dense/sparse/rerank backends as plugins; D1, D5, D8 | DONE `ab9c101` |
+| 3 | `model_fetch` hardening D4, D14, D17 | DONE `49d0f34`, `f2e0fe7` |
+| 4 | Orchestrator/phase defects D6, D7, D9, D11, D12, D13, D16 | DONE `bd896da` (1 fix round) |
+| 5 | One battery core + ps1/sh wrappers; D3, D15; `live` marker | DONE `5a6e3b0` (1 fix round) |
+| 6 | Docs, CHANGELOG, trunk sync, CI | DONE `9f23a93` (2 fix rounds) |
+| 7 | Live gate: per-phase live exercise, fix teams, demo signoff | IN PROGRESS: Waves A-D run, D-A1/D-B1/D-C1/D-D1 fixed, battery re-runs + real-corpus run + user signoff pending |
+
+Task 7 findings fixed: D-A1 `4057648` (byte-identical stdout/artifact), D-D1 `6c08e23` (stress 0.99), D-B1 `5678070`, D-C1 `55bf1db`, rerank env keys `e3a73c7`, test hardening `bf6c445`. Code freeze rule: product code frozen except fixes the live gate proves necessary; doc/CI-only commits do not require phase re-runs.
+
+### Release runbook (steps remaining)
+1. Battery re-runs green: `verify_pipeline.ps1` (adagio) and `verify_pipeline.sh` (WSL Ubuntu-24.04); real-corpus run through all phases; ledger blocks written (kb-recorder).
+2. User signoff per phase via `demo_phase.ps1 -p pNN`; nobody is done until the user has seen it run.
+3. Fill CHANGELOG `Verification:` line with RUN numbers; commit; push.
+4. Whole-branch opus review of `198f343..HEAD`; fix anything found in the same run.
+5. Close PR #3 with a note (docs evicted to kb).
+6. Bot reviews (Copilot/Codex) on PR #4: verify against repo rules, fix only genuine defects, decline the rest with a one-line reply.
+7. Merge PR #4 into `development` (0.2.0, MINOR+1).
+8. `release/1.0.0` -> `main` by PR (MAJOR+1; three numbers; no CHANGELOG entry on promotion); merge; tag `v1.0.0`; fast-forward `development` to `main`.
+9. Cleanup: remove worktree + merged branches; branch protection on `main`/`development`; stop every process and window opened by agents.
 
 ### Non-Goals
-- External server daemon requirement for baseline CLI operations (embedded Qdrant engine operates out-of-the-box).
-- Ad-hoc unstructured stdout logging (strictly forbidden; stdout is reserved for JSON output).
-- Breaking Pydantic schema contracts (`extra="forbid"` enforced across all phases).
+- External Qdrant daemon for baseline operation (embedded mode stays default).
+- Unstructured stdout logging; loosening `extra="forbid"`.
+- A second sparse backend until one exists (`--sparse-model` only; YAGNI).
 
-### Future Potential Initiatives
-- **CI/CD Pipeline:** Add GitHub Actions workflow for multi-platform test batteries (Linux/Windows).
-- **Packaging:** Build and publish sdist/wheel distributions on PyPI.
-- **Interactive Server/UI Mode:** Optional FastAPI / Gradio interface wrapping CLI phases.
+### Future (after 1.0.0)
+Docker Compose for standalone Qdrant; PyPI packaging (`uv build`, `uv tool install`); optional FastAPI/Gradio wrapper.

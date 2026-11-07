@@ -1,53 +1,37 @@
 # TASKS
 
-## Completed Tasks
+## Completed
+- [x] Wave 1-7 (2026-10-31 .. 2026-11-02): contracts, P01-P10 + P00, tests, batteries, PR #1/#2 merged to `main`, architecture map (since evicted to the kb).
+- [x] Release plan Task 1: delete `rag-p04b`, keep `--strategy`, D10 overlap bounds (`cdfa6dc`, `e3041af`).
+- [x] Task 2: dense/sparse/rerank backends as named plugins; D1, D5, D8 (`ab9c101`).
+- [x] Task 3: `model_fetch` D4, D14, D17; aria2c only (`49d0f34`, `f2e0fe7`).
+- [x] Task 4: D6, D7, D9, D11, D12, D13, D16 (`bd896da`).
+- [x] Task 5: `verify_pipeline.py` + ps1/sh wrappers; D3, D15; `live` marker (`5a6e3b0`).
+- [x] Task 6: merge `origin/main`, evict docs, CHANGELOG 0.2.0, plugin-seam docs, CI (`9f23a93`).
+- [x] Live gate Wave A RUN #56-#59 (found D-A1); D-A1 fixed `4057648` RUN #60-#62.
+- [x] Wave B RUN #63-#71 (p01-p07 incl. fastembed dense live); Wave C RUN #72-#74 (p08-p10); Wave D RUN #75-#79 (p00, pytest, batteries).
+- [x] Final fix wave `6c08e23`..`bf6c445` (D-D1, D-B1, D-C1, rerank env keys, test hardening).
+- [x] Real corpus added; `docs/continuity/` restored (`50c6467`); EXE001 fix (`62b0dc7`).
 
-- [x] **Wave 1: Foundation & Strict Contracts**
-  - [x] Implement `BasePhasePayload(strict=True, extra="forbid")` and all Pydantic output schemas in `rag_contracts.py`.
-  - [x] Implement generic `PhaseCLI[T_In, T_Out]` enforcing Tri-Plex I/O.
-  - [x] Configure `pyproject.toml` with console script entrypoints `rag-p00` through `rag-p10`.
-- [x] **Wave 2: Core Ingestion (Phases 01–04)**
-  - [x] Implement `p01_load.py` with multi-file directory and single-file loading, HTML MIME detection, and stem collision disambiguation.
-  - [x] Implement `p02_markdown.py` with HTML-to-clean-Markdown normalization via BeautifulSoup.
-  - [x] Implement `p03_parse.py` with hierarchical AST Markdown header-path extraction.
-  - [x] Implement `p04_chunk.py` with sliding-window semantic chunking preserving `parent_markdown`.
-- [x] **Wave 3: Hybrid Engine & Vector Indexing (Phases 05 & 07)**
-  - [x] Implement `hybrid_engine.py` singleton embedder loaders for Jina-v3 dense (1024-d, INT8 quantization) and SPLADE sparse embeddings.
-  - [x] Implement embedded local disk persistence fallback at `./qdrant_storage` with deterministic UUIDv5 point IDs.
-  - [x] Implement `p05_index.py` contextual prefix injection and batch upsert.
-  - [x] Implement `p07_retrieve.py` Prefetch + Reciprocal Rank Fusion (RRF) query points execution.
-- [x] **Wave 4: Reranking, CRAG & Evaluation (Phases 06, 08–10, 00)**
-  - [x] Implement `p06_query.py` query clause decomposition and HyDE passage expansion.
-  - [x] Implement `p08_rerank.py` Cross-Encoder scoring, parent section deduplication, and Lost-in-the-Middle context assembly.
-  - [x] Implement `p09_generate.py` CRAG decision gate, grounded synthesis, and citation anchoring.
-  - [x] Implement `p10_evaluate.py` RAG Triad metrics (nDCG@k, context precision, faithfulness, answer relevance).
-  - [x] Implement `p00_crag_orchestrator.py` autonomous retry loop controller with query rewriting.
-- [x] **Wave 5: Quality Assurance & Demonstration**
-  - [x] Develop and verify 17 integration and unit tests in `tests/test_p01_to_p04.py`, `tests/test_p05_and_p07.py`, and `tests/test_p06_p08_p09_p10_p00.py`.
-  - [x] Build live terminal verification test batteries (`verify_pipeline.ps1` and `verify_pipeline.sh`).
-  - [x] Add README demo pipeline runner (`run_readme_pipeline.ps1` / `run_readme_pipeline.py`) and Rich output visualizer (`display_readme_results.py`).
-  - [x] Comprehensive documentation in `README.md` and SDD in `docs/plans/2026-10-31-hybrid-rag-cli-plan.md`.
-- [x] **Wave 6: Git Operations, Code Reviews & Release Merge**
-  - [x] Address automated Codex review feedback for PR #1 (HTML MIME detection and stem collision disambiguation).
-  - [x] Add regression test `test_p01_html_mime_and_stem_collision_disambiguation`.
-  - [x] Commit and push demo scripts (`14fbac8`).
-  - [x] Merge PR #1 (`feat/hybrid-rag-cli` -> `development`).
-  - [x] Create and publish branch `main` at root commit `bc1a027`.
-  - [x] Open PR #2 (`development` -> `main`) and merge into `main` (`7437c3a`).
-  - [x] Set `main` as the default branch on GitHub repository `zautke/phase-rag-cli`.
-- [x] **Wave 7: Formal Architecture Mapping & Knowledge Base Synchronization**
-  - [x] Author comprehensive 10-phase + P00 architectural and mathematical map (`docs/architecture/phase_rag_pipeline_map.md`).
-  - [x] Dispatch 2 specialized review subagents (`Math & Algorithmic Auditor` and `Systems & Pipeline Auditor`) to audit formulas, schemas, and execution mechanics.
-  - [x] Integrate closed-form LITM permutations, guarded nDCG@k, SPLADE++ formulations, chunk count formulas, and tri-query retrieval flows.
-  - [x] Synchronize definitive map to `master-kb` (`projects/phase-rag-cli/Phase RAG Pipeline Complete Architectural and Mathematical Map.md`) adhering to the `master-kb` singularity invariant.
-  - [x] Re-index repository symbols and AST graph using `jcodemunch`.
-  - [x] Update canonical continuity document set in `docs/continuity/`.
+## In flight
+- [ ] Final-fix-wave review.
+- [ ] `verify_pipeline.ps1` re-run on adagio after D-D1 (replaces FAIL RUN #78).
+- [ ] `verify_pipeline.sh` re-run under WSL Ubuntu-24.04 (replaces FAIL RUN #79).
+- [ ] Real-corpus run (`docs/__test_data__/Obsidian...Transcript...md`) through p01..p10 + p00.
+- [ ] kb-recorder: run ledger blocks + test-metrics entries for all runs, failed ones included.
+- [ ] Fill CHANGELOG `Verification:` line with RUN numbers.
 
-## Follow-up & Backlog Tasks
+## Next
+- [ ] Per-phase demo signoff by the user (`demo_phase.ps1 -p pNN`), appended to each ledger block (p01-p10 offered; p00 pending).
+- [ ] Whole-branch review on opus (`198f343..HEAD`); fix findings in the same run.
+- [ ] Close PR #3 (superseded).
+- [ ] Copilot/Codex bot reviews on PR #4 addressed or declined with rule citation.
+- [ ] Merge PR #4: 0.2.0 -> `development`.
+- [ ] `release/1.0.0` -> `main` PR, merge, tag `v1.0.0`, fast-forward `development`.
+- [ ] Remove worktree `phase-rag-cli-wt-feat` and merged branches (local + remote).
+- [ ] Branch protection on `main` and `development`.
+- [ ] Stop everything agents started (servers, browsers, demo windows); record leftovers in the hand-off.
 
-- [ ] **Continuous Integration (CI):**
-  - [ ] Add `.github/workflows/ci.yml` running `uv run pytest` and lint checks on PRs targeting `development` and `main`.
-- [ ] **Deployment & Standalone Services:**
-  - [ ] Add `docker-compose.yml` for optional standalone Qdrant server + Web UI dashboard on port 6333.
-- [ ] **Package Distribution:**
-  - [ ] Verify `uv build` wheel generation and local test installation via `uv tool install`.
+## Backlog (after 1.0.0)
+- [ ] `docker-compose.yml` for standalone Qdrant.
+- [ ] `uv build` wheel + `uv tool install` check; PyPI packaging.
