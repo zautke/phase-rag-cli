@@ -60,6 +60,15 @@ def test_every_rag_env_key_matches_its_default_constant() -> None:
         assert str(getattr(holders[0], name)) == value, f"{key}={value} != {name}"
 
 
+def test_p08_backend_and_model_read_the_same_env_keys_as_p05() -> None:
+    import typer.main
+
+    params = {p.name: p for p in typer.main.get_command(p08_rerank.app).params}
+    assert params["backend"].envvar == "RAG_RERANK_BACKEND" and params["backend"].default == he.DEFAULT_RERANK_BACKEND
+    assert params["model_name"].envvar == "RAG_RERANK_MODEL" and params["model_name"].default == he.DEFAULT_RERANK_MODEL
+    assert {"RAG_RERANK_BACKEND", "RAG_RERANK_MODEL"} <= set(env_example())  # parity test above checks the values
+
+
 def test_d13_no_second_literal_threshold_default() -> None:
     for mod in (p00, p09_generate):
         text = Path(mod.__file__).read_text(encoding="utf-8")

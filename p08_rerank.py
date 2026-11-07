@@ -101,6 +101,7 @@ def main(
         typer.Option(
             "--model",
             "-m",
+            envvar="RAG_RERANK_MODEL",
             help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual; with -b fastembed the torch default maps to jinaai/jina-reranker-v2-base-multilingual)",
         ),
     ] = DEFAULT_RERANK_MODEL,
@@ -109,6 +110,7 @@ def main(
         typer.Option(
             "--backend",
             "-b",
+            envvar="RAG_RERANK_BACKEND",
             help=f"Reranker plugin ({'|'.join(sorted(RERANK_BACKENDS))}): 'sentence_transformers' = PyTorch/MPS/CUDA, 'fastembed' = ONNX",
         ),
     ] = DEFAULT_RERANK_BACKEND,
