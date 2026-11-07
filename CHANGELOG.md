@@ -23,6 +23,7 @@
 ### Fixed
 - Fixes D1-D17 of the 2026-11-07 audit: D1 reranker calibration non-monotonic on fastembed (sigmoid always applied); D3 battery transcript wiped with `artifacts/` (logs now in `verify_logs/`); D4 `refs/main` written before the download was verified; D5 fastembed cache defaulted to system temp (now the HF cache); D6 p00 buffered child stderr (now inherited); D7 p00 rewrite burned unused corpus tokens and fell back to demo strings; D8 noisy remote Qdrant probe; D9 missing `--in-file` silently read stdin; D10 `rag-p04 --overlap` must be `>= 0` and `< --max-words` (exit 2, empty stdout otherwise) and the final window no longer duplicates its predecessor; D11 nDCG measured the LITM permutation (now rank order); D12 `--max-retries N` meant N total attempts; D13 CRAG threshold and p00 knob defaults duplicated (single source); D14 aria2c, `huggingface-hub` and `transformers` undeclared, CUDA torch on Linux; D15 battery assertions missing (REWRITE_REQUIRED first, non-empty stderr, `ruff` in Stage 0); D16 `Usage()` never called (now the `--help` epilog); D17 `model_info()` without timeout and called on every load. D2 (stray uncommitted `hybrid_engine.py` in the main worktree) is not a code change in this release.
 - P08 indents every line of each XML context body.
+- D-C1: P09 extractive answer skips Markdown heading lines and list bullets without terminal punctuation.
 - D-B1: dense sentence-transformers loader uses `get_embedding_dimension` (the old name raises a FutureWarning on sentence-transformers 6.x).
 
 ### Removed

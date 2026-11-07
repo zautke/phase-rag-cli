@@ -111,6 +111,25 @@ def test_ndcg_and_answer_relevance_unit() -> None:
     assert relevance_poor == 0.0
 
 
+def test_p09_skips_headings_and_unpunctuated_bullets() -> None:
+    """D-C1: Markdown headings / unterminated bullets are not answer sentences; a real sentence is."""
+    items = [
+        rc.RerankedContextItem(
+            chunk_id="chk_0",
+            doc_id="doc_0",
+            cross_encoder_score=0.9,
+            expanded_parent_context="# Hybrid RAG Architecture\n## Hybrid RAG Overview\n- Hybrid RAG fusion list item\n- Dense and sparse vectors are merged by RRF.\nHybrid RAG fuses dense and sparse vectors with RRF.",
+        )
+    ]
+    ans, _ = p09_generate.extract_grounded_answer(
+        query="Hybrid RAG architecture overview fusion", top_contexts=items, crag_threshold=0.5, max_score=0.9, verdict="GROUNDED"
+    )
+    assert "Hybrid RAG Architecture [" not in ans and "Hybrid RAG Overview [" not in ans
+    assert "list item [" not in ans
+    assert "Hybrid RAG fuses dense and sparse vectors with RRF. [doc_0:chk_0]" in ans
+    assert "Dense and sparse vectors are merged by RRF. [doc_0:chk_0]" in ans
+
+
 def test_p09_extractive_grounding_unit() -> None:
     """Unit test p09 extractive grounding under GROUNDED, REWRITE_REQUIRED, and empty contexts."""
     items = [

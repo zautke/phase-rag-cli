@@ -63,9 +63,13 @@ def extract_grounded_answer(
             if line.strip()
         ]
         for line in lines:
-            clean_line = line.lstrip("#").strip()
-            if not clean_line:
+            if line.startswith("#"):  # Markdown heading, not an answer sentence
                 continue
+            clean_line = line
+            if bullet := re.match(r"(?:[-*+]|\d+[.)])\s+", line):  # list item: keep only if it ends like a sentence
+                clean_line = line[bullet.end():].strip()
+                if not clean_line or clean_line[-1] not in ".!?":
+                    continue
             parts = [
                 p.strip()
                 for p in re.split(r"(?<=[.!?])\s+", clean_line)
