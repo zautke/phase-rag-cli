@@ -162,7 +162,7 @@ Common options unless noted: `--in-file/-i PATH` (else stdin), `--out-file/-o PA
 
 ### P04 `rag-p04` / `p04_chunk.py` (pluggable)
 - In `Phase03ParsedOutput` → Out `Phase04ChunkedOutput` (`artifacts/04_chunked.json`).
-- Options: `--max-words/-m INT` (60, `min=1`), `--overlap/-v INT` (12, unbounded: `>= max_words` gives step 1 and a chunk explosion; negative skips words), `--strategy/-s NAME` (`sliding_window`; help lists `sorted(CHUNKERS)`).
+- Options: `--max-words/-m INT` (60, `min=1`), `--overlap/-v INT` (12, `min=0` and `< max_words`; otherwise `BadParameter`, exit 2, stdout empty, checked before stdin), `--strategy/-s NAME` (`sliding_window`; help lists `sorted(CHUNKERS)`).
 - Order: resolve strategy **before** reading stdin (unknown → exit 2, stderr `Unknown chunker 'x'. Known: recursive, sliding_window`, stdout empty) → `load_upstream` → `chunks = [c for sec in sections for c in chunker(sec, max_words, overlap)]` → emit with `chunk_strategy=strategy`.
 - Every chunk: `parent_markdown = f"### {' > '.join(header_path)}\n{body}"` (parent-document retrieval), `token_count = len(words)`.
 
@@ -208,7 +208,7 @@ Common options unless noted: `--in-file/-i PATH` (else stdin), `--out-file/-o PA
 ### 7.1 Add a chunker strategy (`chunkers.py`)
 ```python
 Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]   # (section, max_words, overlap)
-_windows(words: list[str], max_words: int, overlap: int) -> list[list[str]]   # step = max(1, max_words - overlap)
+_windows(words: list[str], max_words: int, overlap: int) -> list[list[str]]   # step = max(1, max_words - overlap); window starts in range(0, max(1, len(words) - overlap), step); empty -> []
 _make_chunk(sec: ParsedSection, chunk_id: str, words: list[str]) -> DocumentChunk
 CHUNKERS: dict[str, Chunker]; resolve_chunker(name) -> Chunker   # KeyError("Unknown chunker '<name>'. Known: ...")
 ```
@@ -220,7 +220,7 @@ def chunk_sentences(sec: ParsedSection, max_words: int, overlap: int) -> list[Do
 CHUNKERS["sentences"] = chunk_sentences
 ```
 Rules: unique id prefix per strategy (`_chk_`, `_rec_` taken); `chunk_id` unique within the run (P05 derives Qdrant point ids from it; duplicates silently overwrite); never emit empty `text`; add a case to `tests/test_chunkers.py`. `--strategy` help and the error message update automatically.
-- `sliding_window`: `_windows(body.split(), max_words, overlap)`, ids `{section_id}_chk_{i}`; empty body → no chunks; the tail window can be a subset of the previous one (e.g. 60 words at 60/12 → windows 0:60 and 48:60; tests lock this).
+- `sliding_window`: `_windows(body.split(), max_words, overlap)`, ids `{section_id}_chk_{i}`; empty body → no chunks; no tail window is a subset of its predecessor (60 words at 60/12 → one window 0:60; tests lock this).
 - `recursive`: split on `\n\n` (never fires on pipeline input because P03 drops blank lines, so it is whole-section-or-sentences there); paragraph > `max_words` → split on `(?<=[.!?])\s+`; sentence > `max_words` → `_windows(words, max_words, 0)`; no packing; one running counter `{section_id}_rec_{n}`; `overlap` ignored.
 
 ### 7.2 Add a field to a Phase model

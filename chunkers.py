@@ -10,7 +10,9 @@ Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]
 
 def _windows(words: list[str], max_words: int, overlap: int) -> list[list[str]]:
     step = max(1, max_words - overlap)
-    return [words[s : s + max_words] for s in range(0, len(words), step)]
+    if not words:
+        return []
+    return [words[s : s + max_words] for s in range(0, max(1, len(words) - overlap), step)]
 
 
 def _make_chunk(sec: ParsedSection, chunk_id: str, words: list[str]) -> DocumentChunk:

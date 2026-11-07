@@ -45,7 +45,7 @@ def main(
     ] = 60,
     overlap: Annotated[
         int,
-        typer.Option("--overlap", "-v", help="Sliding window word overlap"),
+        typer.Option("--overlap", "-v", min=0, help="Sliding window word overlap (< --max-words)"),
     ] = 12,
     strategy: Annotated[
         str,
@@ -60,6 +60,8 @@ def main(
         chunker = resolve_chunker(strategy)
     except KeyError as e:
         raise typer.BadParameter(e.args[0]) from None
+    if overlap >= max_words:
+        raise typer.BadParameter(f"--overlap ({overlap}) must be < --max-words ({max_words})")
     upstream: Phase03ParsedOutput = cli_engine.load_upstream(in_file)
     chunks = [c for sec in upstream.sections for c in chunker(sec, max_words, overlap)]
     output = Phase04ChunkedOutput(run_id=upstream.run_id, chunks=chunks, chunk_strategy=strategy)

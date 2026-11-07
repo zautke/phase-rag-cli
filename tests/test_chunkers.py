@@ -1,3 +1,4 @@
+import itertools
 import subprocess
 import sys
 from pathlib import Path
@@ -14,11 +15,24 @@ def sec(body: str) -> ParsedSection:
     return ParsedSection(section_id="s", doc_id="d", header_path=["H1", "H2"], body=body, metadata={})
 
 
-def test_sliding_window_legacy_parity():
+def test_sliding_window_steps_by_max_words_minus_overlap():
     chunks = chunk_sliding_window(sec(" ".join(f"w{i}" for i in range(20))), 8, 2)
-    assert [c.chunk_id for c in chunks] == ["s_chk_0", "s_chk_1", "s_chk_2", "s_chk_3"]
-    assert [c.text.split()[0] for c in chunks] == ["w0", "w6", "w12", "w18"]
-    assert chunks[-1].text == "w18 w19"
+    assert [c.chunk_id for c in chunks] == ["s_chk_0", "s_chk_1", "s_chk_2"]
+    assert [c.text.split()[0] for c in chunks] == ["w0", "w6", "w12"]
+    assert chunks[-1].text.split()[-1] == "w19"
+
+
+def test_sliding_window_no_duplicate_tail_window():
+    for n, m, o in [(20, 8, 2), (60, 60, 12), (14, 8, 2), (9, 8, 0), (5, 3, 2)]:
+        chunks = chunk_sliding_window(sec(" ".join(f"w{i}" for i in range(n))), m, o)
+        wins = [c.text.split() for c in chunks]
+        assert wins[-1][-1] == f"w{n - 1}"
+        for prev, cur in itertools.pairwise(wins):
+            assert not set(cur) <= set(prev), (n, m, o, prev, cur)
+
+
+def test_sliding_window_empty_body_yields_no_chunks():
+    assert chunk_sliding_window(sec(" \n "), 8, 2) == []
 
 
 def test_recursive_paragraphs_then_sentences():
@@ -73,3 +87,23 @@ def test_p04_cli_unknown_strategy_exit2_clean_stdout(tmp_path):
     assert proc.returncode == 2
     assert proc.stdout == b""
     assert b"Known:" in proc.stderr
+
+
+@pytest.mark.parametrize("overlap", ["-1", "60", "99"])
+def test_p04_cli_bad_overlap_exit2_clean_stdout(tmp_path, overlap):
+    in03 = tmp_path / "03.json"
+    in03.write_text(
+        Phase03ParsedOutput(run_id="r", sections=[sec("a b c")]).model_dump_json(),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "p04_chunk.py", "-m", "60", "-v", overlap, "-i", str(in03),
+         "-o", str(tmp_path / "o.json")],
+        cwd=ROOT,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+    )
+    assert proc.returncode == 2
+    assert proc.stdout == b""
+    assert not (tmp_path / "o.json").exists()
