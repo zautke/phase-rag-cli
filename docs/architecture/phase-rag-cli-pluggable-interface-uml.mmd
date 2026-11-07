@@ -1,0 +1,234 @@
+classDiagram
+direction LR
+
+namespace ContractKernel {
+  class BasePhasePayload {
+    <<abstract>>
+    ConfigDict strict=True extra=forbid
+    +run_id: str = utcnow YYYYMMDDTHHMMSSZ
+    +phase_name: str
+    +timestamp: str = utcnow isoformat
+  }
+  class PhaseCLI~T_In, T_Out~ {
+    +phase_title: str
+    +input_model: type[T_In] | None
+    +output_model: type[T_Out]
+    +default_out_path: str
+    +__init__() ensure_utf8_streams
+    +load_upstream(in_file: Path | None) T_In
+    +emit(payload: T_Out, out_file: Path, quiet: bool) None
+  }
+  class err_console {
+    <<singleton>>
+    Console(stderr=True)
+  }
+}
+
+namespace WireSchemas {
+  class Phase01LoadedOutput { +documents: list~RawDocument~ }
+  class Phase02MarkdownOutput { +documents: list~MarkdownDocument~ }
+  class Phase03ParsedOutput { +sections: list~ParsedSection~ }
+  class Phase04ChunkedOutput { +chunks: list~DocumentChunk~ ; +chunk_strategy: str = sliding_window }
+  class Phase05IndexedOutput { +qdrant_collection: str ; +indexed_records: list~EnrichedIndexedChunk~ }
+  class Phase06QueryPlanOutput { +original_query: str ; +route: str ; +sub_queries: list~str~ ; +hyde_passage: str ; +metadata_filters: dict ; +qdrant_collection: str }
+  class Phase07RetrievedOutput { +query_plan: Phase06QueryPlanOutput ; +candidates: list~RetrievedCandidate~ }
+  class Phase08RerankedOutput { +original_query: str ; +xml_context_block: str ; +top_contexts: list~RerankedContextItem~ }
+  class Phase09GenerationOutput { +original_query: str ; +crag_verdict: GROUNDED or REWRITE_REQUIRED ; +grounded_confidence: float ; +synthesized_answer: str ; +citations: list~str~ ; +xml_context_block: str }
+  class Phase10EvalOutput { +ndcg_at_k: float ; +context_precision: float ; +faithfulness_score: float ; +answer_relevance: float ; +hallucination_detected: bool ; +final_answer: str }
+  class PhaseCRAGLoopOutput { +initial_query: str ; +final_query: str ; +total_attempts: int ; +converged: bool ; +attempts_history: list~CRAGAttemptRecord~ ; +final_generation: Phase09GenerationOutput ; +final_evaluation: Phase10EvalOutput }
+  class GraphArtifact { +extractor: str ; +nodes: list~GraphNode~ ; +edges: list~GraphEdge~ ; side-artifact, no consumer }
+}
+
+namespace ItemModels {
+  class RawDocument { +doc_id ; +source_uri ; +mime_type ; +raw_content }
+  class MarkdownDocument { +doc_id ; +source_uri ; +clean_markdown ; +frontmatter: dict }
+  class ParsedSection { +section_id ; +doc_id ; +header_path: list~str~ ; +body ; +metadata: dict }
+  class DocumentChunk { +chunk_id ; +parent_section_id ; +doc_id ; +text ; +token_count: int ; +header_hierarchy: list~str~ ; +parent_markdown }
+  class EnrichedIndexedChunk { +chunk_id ; +doc_id ; +contextualized_text ; +dense_vector: list~float~ ; +sparse_indices: list~int~ ; +sparse_values: list~float~ ; +parent_markdown ; +header_hierarchy }
+  class RetrievedCandidate { +chunk_id ; +doc_id ; +contextualized_text ; +parent_markdown ; +dense_score ; +sparse_score ; +rrf_fused_score }
+  class RerankedContextItem { +chunk_id ; +doc_id ; +cross_encoder_score: float ; +expanded_parent_context }
+  class CRAGAttemptRecord { +attempt: int ; +query_used ; +crag_verdict ; +grounded_confidence ; +top_chunk_ids: list~str~ ; +rewrite_reason: str | None }
+}
+
+BasePhasePayload <|-- Phase01LoadedOutput
+BasePhasePayload <|-- Phase02MarkdownOutput
+BasePhasePayload <|-- Phase03ParsedOutput
+BasePhasePayload <|-- Phase04ChunkedOutput
+BasePhasePayload <|-- Phase05IndexedOutput
+BasePhasePayload <|-- Phase06QueryPlanOutput
+BasePhasePayload <|-- Phase07RetrievedOutput
+BasePhasePayload <|-- Phase08RerankedOutput
+BasePhasePayload <|-- Phase09GenerationOutput
+BasePhasePayload <|-- Phase10EvalOutput
+BasePhasePayload <|-- PhaseCRAGLoopOutput
+BasePhasePayload <|-- GraphArtifact
+Phase01LoadedOutput *-- RawDocument
+Phase02MarkdownOutput *-- MarkdownDocument
+Phase03ParsedOutput *-- ParsedSection
+Phase04ChunkedOutput *-- DocumentChunk
+Phase05IndexedOutput *-- EnrichedIndexedChunk
+Phase07RetrievedOutput *-- Phase06QueryPlanOutput
+Phase07RetrievedOutput *-- RetrievedCandidate
+Phase08RerankedOutput *-- RerankedContextItem
+PhaseCRAGLoopOutput *-- CRAGAttemptRecord
+PhaseCRAGLoopOutput *-- Phase09GenerationOutput
+PhaseCRAGLoopOutput *-- Phase10EvalOutput
+
+namespace PluginInterfaces {
+  class IExecutableStage {
+    <<interface>>
+    Contract: any executable is a plugin. The UNIX pipe is the bus.
+    stdin : Phase[N-1] JSON utf-8, BOM tolerated
+    stdout : exactly model_dump_json(indent=2) + newline of Phase[N], nothing else
+    stderr : Rich telemetry, progress, warnings
+    disk : --out-file artifacts/NN_name.json utf-8 no BOM
+    exit : 0 ok ; 1 contract or runtime failure ; 2 usage
+    flags : --in-file/-i --out-file/-o --quiet/-q plus phase knobs, each short+long
+    env : QDRANT_URL ; RAG_* via typer envvar ; Config SSoT = .env
+    +Usage() str
+    +main(options) None
+  }
+  class IStrategy~Args, Result~ {
+    <<interface>>
+    In-phase swap of ONE algorithm behind a name
+    REGISTRY: dict[str, Callable]
+    +resolve(name) Callable raises KeyError Unknown ... Known: a, b
+    selected by --strategy/-s BEFORE load_upstream ; exit 2 on unknown
+    output model carries the chosen name e.g. chunk_strategy
+  }
+  class IPassThroughStage~T~ {
+    <<interface>>
+    PhaseCLI(T, T) : input bytes == output bytes
+    writes a side artifact to --graph-file/-g or similar
+    insertable between N and N+1 without touching contracts
+  }
+  class IEmbedderBackend {
+    <<interface>>
+    +embed_dense_batch(texts) list of 1024-d L2-normalized vectors
+    +embed_sparse_batch(texts) list of (indices, values)
+    warm-up = first call, singleton, lazy
+  }
+  class IRerankerBackend {
+    <<interface>>
+    +rerank_passages_batch(query, passages, model_name, backend, batch_size) list~float~ in [0,1]
+    backend: transformers | fastembed ; selected by --backend/-b --model/-m
+    MUST be monotonic in raw score ; D1 fix: sigmoid always on fastembed path
+  }
+  class IModelFetcher {
+    <<interface>>
+    +ensure_model(repo_id, cache_dir, include, exclude) Path
+    aria2c -c -x8 -s8, announced, progress on stderr, sizes verified
+    HF cache layout models--org--name/snapshots/sha shared by ST and fastembed
+    refs/main written only after verification ; D4 fix
+  }
+  class IEntryPointRegistry {
+    <<interface>>
+    DEFERRED until a 3rd-party strategy exists
+    group rag.chunkers : ep.load() returns import-cheap register() that fills REGISTRY
+    pattern: LightRAG lightrag.chunkers ; pluggy load_setuptools_entrypoints
+  }
+}
+
+namespace PublicCLI {
+  class rag_p01 { Phase01LoadedOutput ; --source-dir/-s ; no upstream }
+  class rag_p02 { Phase01 to Phase02 ; HTML to Markdown }
+  class rag_p03 { Phase02 to Phase03 ; AST header paths }
+  class rag_p04 { Phase03 to Phase04 ; --max-words/-m --overlap/-v --strategy/-s }
+  class rag_p04b { Phase04 to Phase04 ; --graph-file/-g --extractor/-e --min-weight/-w }
+  class rag_p05 { Phase04 to Phase05 ; --collection/-c --qdrant-url/-u --qdrant-path/-p --recreate/-r or --append/-a }
+  class rag_p06 { Phase05 to Phase06 ; --query/-q ; HyDE + decomposition }
+  class rag_p07 { Phase06 to Phase07 ; --prefetch-limit/-l --rrf-k/-k --dense-weight/-d --sparse-weight/-s --top-k/-t }
+  class rag_p08 { Phase07 to Phase08 ; --backend/-b --model/-m --top-n/-n --batch-size/-B ; LitM order, parent dedup }
+  class rag_p09 { Phase08 to Phase09 ; --crag-threshold/-t ; verdict gate }
+  class rag_p10 { Phase09 to Phase10 ; RAG Triad metrics }
+  class rag_p00 { Phase05 to PhaseCRAGLoopOutput ; subprocess loop P06..P09 per attempt then P10 ; --max-retries/-r --crag-threshold/-t plus forwarded P07 and P08 knobs }
+}
+
+namespace Engine {
+  class hybrid_engine {
+    <<module>>
+    DENSE_MODEL_NAME = jinaai/jina-embeddings-v3
+    SPARSE_MODEL_NAME = prithivida/Splade_PP_en_v1
+    DENSE_VECTOR_NAME = jina-dense ; SPARSE_VECTOR_NAME = splade-sparse ; DENSE_DIM = 1024
+    DEFAULT_RERANK_MODEL = BAAI/bge-reranker-v2-m3
+    DEFAULT_FASTEMBED_RERANK_MODEL = jinaai/jina-reranker-v2-base-multilingual
+    +get_dense_embedder() model, backend
+    +get_sparse_embedder() SparseTextEmbedding
+    +embed_dense_batch(texts)
+    +embed_sparse_batch(texts)
+    +get_qdrant_client(url, path) QdrantClient
+    +ensure_hybrid_collection(client, name, recreate)
+    +deterministic_point_uuid(chunk_id) str UUIDv5 NAMESPACE_DNS
+    +resolve_rerank_model(model, backend) str
+    +rerank_passages_batch(query, passages, model, backend, batch_size)
+  }
+  class model_fetch {
+    <<module>>
+    +ensure_model(repo_id, cache_dir, include, exclude) Path
+  }
+  class chunkers {
+    <<module>>
+    Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]
+    CHUNKERS = sliding_window, recursive
+    +chunk_sliding_window(sec, max_words, overlap)
+    +chunk_recursive(sec, max_words, overlap)
+    +resolve_chunker(name) Chunker
+  }
+}
+
+rag_p01 ..|> IExecutableStage
+rag_p02 ..|> IExecutableStage
+rag_p03 ..|> IExecutableStage
+rag_p04 ..|> IExecutableStage
+rag_p04b ..|> IExecutableStage
+rag_p04b ..|> IPassThroughStage
+rag_p05 ..|> IExecutableStage
+rag_p06 ..|> IExecutableStage
+rag_p07 ..|> IExecutableStage
+rag_p08 ..|> IExecutableStage
+rag_p09 ..|> IExecutableStage
+rag_p10 ..|> IExecutableStage
+rag_p00 ..|> IExecutableStage
+chunkers ..|> IStrategy
+hybrid_engine ..|> IEmbedderBackend
+hybrid_engine ..|> IRerankerBackend
+model_fetch ..|> IModelFetcher
+IEntryPointRegistry ..> IStrategy : populates REGISTRY (deferred)
+IExecutableStage o-- PhaseCLI : composes one cli_engine
+PhaseCLI ..> BasePhasePayload : validates T_In / T_Out
+PhaseCLI ..> err_console : telemetry only
+rag_p04 ..> chunkers : --strategy
+rag_p04b ..> GraphArtifact : writes side artifact
+rag_p05 ..> hybrid_engine
+rag_p07 ..> hybrid_engine
+rag_p08 ..> hybrid_engine
+hybrid_engine ..> model_fetch : prefetch before load
+rag_p00 ..> rag_p06 : subprocess
+rag_p00 ..> rag_p07 : subprocess
+rag_p00 ..> rag_p08 : subprocess
+rag_p00 ..> rag_p09 : subprocess
+rag_p00 ..> rag_p10 : subprocess
+
+rag_p01 --> rag_p02 : Phase01LoadedOutput
+rag_p02 --> rag_p03 : Phase02MarkdownOutput
+rag_p03 --> rag_p04 : Phase03ParsedOutput
+rag_p04 --> rag_p04b : Phase04ChunkedOutput (optional)
+rag_p04b --> rag_p05 : Phase04ChunkedOutput
+rag_p05 --> rag_p06 : Phase05IndexedOutput
+rag_p06 --> rag_p07 : Phase06QueryPlanOutput
+rag_p07 --> rag_p08 : Phase07RetrievedOutput
+rag_p08 --> rag_p09 : Phase08RerankedOutput
+rag_p09 --> rag_p10 : Phase09GenerationOutput
+
+note for IExecutableStage "EXTERNAL STAGE BLUEPRINT (zero framework code):
+1. Read Phase[N-1] JSON from stdin or --in-file; validate with the published Pydantic model (strict, extra=forbid).
+2. Compute. Log only to stderr.
+3. Write Phase[N] JSON to --out-file and the same bytes to stdout.
+4. Exit 0; non-zero on any failure. Then: rag-pN-1 | my-stage | rag-pN+1."
+note for IStrategy "IN-PHASE STRATEGY BLUEPRINT:
+1. def my_strategy(section, max_words, overlap) -> list[DocumentChunk]
+2. CHUNKERS['my_strategy'] = my_strategy (or entry point in group rag.chunkers once it lands)
+3. rag-p04 -s my_strategy ; output.chunk_strategy == 'my_strategy'"
+note for IPassThroughStage "SIDE-ARTIFACT STAGE BLUEPRINT:
+cli_engine = PhaseCLI(title, PhaseNOutput, PhaseNOutput, default_out)
+upstream = cli_engine.load_upstream(in_file) ; write side file ; cli_engine.emit(upstream, out_file, quiet)"
