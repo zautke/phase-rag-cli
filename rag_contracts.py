@@ -271,25 +271,3 @@ class PhaseCLI(Generic[T_In, T_Out]):
         # 3. Stream pure JSON to stdout for the next CLI phase
         sys.stdout.write(json_str + "\n")
         sys.stdout.flush()
-
-
-# --- GRAPHRAG SIDE ARTIFACT (Phase 4b) ---
-class GraphNode(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    entity: str
-    chunk_ids: list[str]
-
-
-class GraphEdge(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    source: str
-    target: str
-    weight: int
-    chunk_ids: list[str]
-
-
-class GraphArtifact(BasePhasePayload):
-    phase_name: str = "04b_graph"
-    extractor: str
-    nodes: list[GraphNode]
-    edges: list[GraphEdge]

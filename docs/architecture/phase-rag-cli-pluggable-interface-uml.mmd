@@ -36,7 +36,6 @@ namespace WireSchemas {
   class Phase09GenerationOutput { +original_query: str ; +crag_verdict: GROUNDED or REWRITE_REQUIRED ; +grounded_confidence: float ; +synthesized_answer: str ; +citations: list~str~ ; +xml_context_block: str }
   class Phase10EvalOutput { +ndcg_at_k: float ; +context_precision: float ; +faithfulness_score: float ; +answer_relevance: float ; +hallucination_detected: bool ; +final_answer: str }
   class PhaseCRAGLoopOutput { +initial_query: str ; +final_query: str ; +total_attempts: int ; +converged: bool ; +attempts_history: list~CRAGAttemptRecord~ ; +final_generation: Phase09GenerationOutput ; +final_evaluation: Phase10EvalOutput }
-  class GraphArtifact { +extractor: str ; +nodes: list~GraphNode~ ; +edges: list~GraphEdge~ ; side-artifact, no consumer }
 }
 
 namespace ItemModels {
@@ -61,7 +60,6 @@ BasePhasePayload <|-- Phase08RerankedOutput
 BasePhasePayload <|-- Phase09GenerationOutput
 BasePhasePayload <|-- Phase10EvalOutput
 BasePhasePayload <|-- PhaseCRAGLoopOutput
-BasePhasePayload <|-- GraphArtifact
 Phase01LoadedOutput *-- RawDocument
 Phase02MarkdownOutput *-- MarkdownDocument
 Phase03ParsedOutput *-- ParsedSection
@@ -96,12 +94,6 @@ namespace PluginInterfaces {
     selected by --strategy/-s BEFORE load_upstream ; exit 2 on unknown
     output model carries the chosen name e.g. chunk_strategy
   }
-  class IPassThroughStage~T~ {
-    <<interface>>
-    PhaseCLI(T, T) : input bytes == output bytes
-    writes a side artifact to --graph-file/-g or similar
-    insertable between N and N+1 without touching contracts
-  }
   class IEmbedderBackend {
     <<interface>>
     +embed_dense_batch(texts) list of 1024-d L2-normalized vectors
@@ -134,7 +126,6 @@ namespace PublicCLI {
   class rag_p02 { Phase01 to Phase02 ; HTML to Markdown }
   class rag_p03 { Phase02 to Phase03 ; AST header paths }
   class rag_p04 { Phase03 to Phase04 ; --max-words/-m --overlap/-v --strategy/-s }
-  class rag_p04b { Phase04 to Phase04 ; --graph-file/-g --extractor/-e --min-weight/-w }
   class rag_p05 { Phase04 to Phase05 ; --collection/-c --qdrant-url/-u --qdrant-path/-p --recreate/-r or --append/-a }
   class rag_p06 { Phase05 to Phase06 ; --query/-q ; HyDE + decomposition }
   class rag_p07 { Phase06 to Phase07 ; --prefetch-limit/-l --rrf-k/-k --dense-weight/-d --sparse-weight/-s --top-k/-t }
@@ -180,8 +171,6 @@ rag_p01 ..|> IExecutableStage
 rag_p02 ..|> IExecutableStage
 rag_p03 ..|> IExecutableStage
 rag_p04 ..|> IExecutableStage
-rag_p04b ..|> IExecutableStage
-rag_p04b ..|> IPassThroughStage
 rag_p05 ..|> IExecutableStage
 rag_p06 ..|> IExecutableStage
 rag_p07 ..|> IExecutableStage
@@ -198,7 +187,6 @@ IExecutableStage o-- PhaseCLI : composes one cli_engine
 PhaseCLI ..> BasePhasePayload : validates T_In / T_Out
 PhaseCLI ..> err_console : telemetry only
 rag_p04 ..> chunkers : --strategy
-rag_p04b ..> GraphArtifact : writes side artifact
 rag_p05 ..> hybrid_engine
 rag_p07 ..> hybrid_engine
 rag_p08 ..> hybrid_engine
@@ -212,8 +200,7 @@ rag_p00 ..> rag_p10 : subprocess
 rag_p01 --> rag_p02 : Phase01LoadedOutput
 rag_p02 --> rag_p03 : Phase02MarkdownOutput
 rag_p03 --> rag_p04 : Phase03ParsedOutput
-rag_p04 --> rag_p04b : Phase04ChunkedOutput (optional)
-rag_p04b --> rag_p05 : Phase04ChunkedOutput
+rag_p04 --> rag_p05 : Phase04ChunkedOutput
 rag_p05 --> rag_p06 : Phase05IndexedOutput
 rag_p06 --> rag_p07 : Phase06QueryPlanOutput
 rag_p07 --> rag_p08 : Phase07RetrievedOutput
@@ -229,6 +216,3 @@ note for IStrategy "IN-PHASE STRATEGY BLUEPRINT:
 1. def my_strategy(section, max_words, overlap) -> list[DocumentChunk]
 2. CHUNKERS['my_strategy'] = my_strategy (or entry point in group rag.chunkers once it lands)
 3. rag-p04 -s my_strategy ; output.chunk_strategy == 'my_strategy'"
-note for IPassThroughStage "SIDE-ARTIFACT STAGE BLUEPRINT:
-cli_engine = PhaseCLI(title, PhaseNOutput, PhaseNOutput, default_out)
-upstream = cli_engine.load_upstream(in_file) ; write side file ; cli_engine.emit(upstream, out_file, quiet)"

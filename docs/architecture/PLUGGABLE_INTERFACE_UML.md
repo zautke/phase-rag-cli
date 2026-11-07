@@ -7,9 +7,9 @@
 ## Reading guide
 
 - **ContractKernel**: `BasePhasePayload` (strict, extra=forbid, `run_id`/`phase_name`/`timestamp`) and the generic `PhaseCLI[T_In, T_Out]` whose `load_upstream` / `emit` pair is the only I/O path a phase may use. `err_console` is the only console and it is stderr.
-- **WireSchemas / ItemModels**: the 12 `BasePhasePayload` subclasses (codemunch `get_class_hierarchy`, 12 descendants) and their item models. These are the public wire format of every hop; the pipe carries exactly one of them per hop.
-- **PluginInterfaces**: the six seams a plugin can implement. `IExecutableStage` is the primary one: *any executable that honours it is a plugin, with zero framework code*. `IStrategy` is the in-phase seam (`--strategy`). `IPassThroughStage` is the side-artifact seam. `IEmbedderBackend`, `IRerankerBackend`, `IModelFetcher` are the engine seams. `IEntryPointRegistry` is deferred until a third-party strategy exists.
-- **PublicCLI**: the 13 console scripts in `pyproject.toml [project.scripts]` with their in/out contract and every option (all short+long). `rag-p00` drives P06..P09 as subprocesses and finishes with P10.
+- **WireSchemas / ItemModels**: the 11 `BasePhasePayload` subclasses and their item models. These are the public wire format of every hop; the pipe carries exactly one of them per hop.
+- **PluginInterfaces**: the five seams a plugin can implement. `IExecutableStage` is the primary one: *any executable that honours it is a plugin, with zero framework code*. `IStrategy` is the in-phase seam (`--strategy`). `IEmbedderBackend`, `IRerankerBackend`, `IModelFetcher` are the engine seams. `IEntryPointRegistry` is deferred until a third-party strategy exists.
+- **PublicCLI**: the 11 console scripts in `pyproject.toml [project.scripts]` with their in/out contract and every option (all short+long). `rag-p00` drives P06..P09 as subprocesses and finishes with P10.
 - **Engine**: the public functions and constants of `hybrid_engine.py`, `model_fetch.py`, `chunkers.py`.
 - Edges: `..|>` realizes, `*--` composes, `..>` depends, `-->` the pipe hop with the payload type as label.
 
@@ -19,9 +19,7 @@
 
 **B. In-phase strategy.** One plain function with the published signature (`Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]`), added to the phase's `REGISTRY` dict and selected by `--strategy/-s`. Resolve the name before `load_upstream` so an unknown name exits 2 with `Known: …` on stderr and an empty stdout. The output payload records the chosen name (`chunk_strategy`). Third-party discovery (`importlib.metadata.entry_points(group="rag.chunkers")`, each entry point an import-cheap `register()` function as in LightRAG `lightrag.chunkers` and pluggy `load_setuptools_entrypoints`) is deferred until a third-party strategy exists.
 
-**C. Pass-through side-artifact stage.** `PhaseCLI(title, PhaseNOutput, PhaseNOutput, default_out)`; `upstream = load_upstream(in_file)`; write the side file; `emit(upstream, out_file, quiet)` so stdout is byte-identical to stdin. Insertable anywhere without touching contracts.
-
-**D. Engine backends.** Embedders and rerankers are selected by CLI flag (`--backend/-b`, `--model/-m`), load lazily on first call (singleton), fetch weights through `IModelFetcher` (aria2c, announced, progress on stderr, sizes verified, HF cache layout shared by sentence-transformers and fastembed), and must return calibrated, monotonic scores in [0,1].
+**C. Engine backends.** Embedders and rerankers are selected by CLI flag (`--backend/-b`, `--model/-m`), load lazily on first call (singleton), fetch weights through `IModelFetcher` (aria2c, announced, progress on stderr, sizes verified, HF cache layout shared by sentence-transformers and fastembed), and must return calibrated, monotonic scores in [0,1].
 
 ## Invariants every plugin must keep
 
@@ -45,7 +43,6 @@
 - `IModelFetcher` writes `refs/main` before verification (`model_fetch.py:77`) — D4.
 - Dense embedder: fastembed branch unreachable; always sentence-transformers (`hybrid_engine.py:79-104`) — spec decision pending.
 - `Usage()` defined in 12 CLIs, called nowhere — D16.
-- `GraphArtifact` has no consumer — deletion pending user decision.
 
 ## Diagram (Mermaid source)
 
@@ -87,7 +84,6 @@ namespace WireSchemas {
   class Phase09GenerationOutput { +original_query: str ; +crag_verdict: GROUNDED or REWRITE_REQUIRED ; +grounded_confidence: float ; +synthesized_answer: str ; +citations: list~str~ ; +xml_context_block: str }
   class Phase10EvalOutput { +ndcg_at_k: float ; +context_precision: float ; +faithfulness_score: float ; +answer_relevance: float ; +hallucination_detected: bool ; +final_answer: str }
   class PhaseCRAGLoopOutput { +initial_query: str ; +final_query: str ; +total_attempts: int ; +converged: bool ; +attempts_history: list~CRAGAttemptRecord~ ; +final_generation: Phase09GenerationOutput ; +final_evaluation: Phase10EvalOutput }
-  class GraphArtifact { +extractor: str ; +nodes: list~GraphNode~ ; +edges: list~GraphEdge~ ; side-artifact, no consumer }
 }
 
 namespace ItemModels {
@@ -112,7 +108,6 @@ BasePhasePayload <|-- Phase08RerankedOutput
 BasePhasePayload <|-- Phase09GenerationOutput
 BasePhasePayload <|-- Phase10EvalOutput
 BasePhasePayload <|-- PhaseCRAGLoopOutput
-BasePhasePayload <|-- GraphArtifact
 Phase01LoadedOutput *-- RawDocument
 Phase02MarkdownOutput *-- MarkdownDocument
 Phase03ParsedOutput *-- ParsedSection
@@ -147,12 +142,6 @@ namespace PluginInterfaces {
     selected by --strategy/-s BEFORE load_upstream ; exit 2 on unknown
     output model carries the chosen name e.g. chunk_strategy
   }
-  class IPassThroughStage~T~ {
-    <<interface>>
-    PhaseCLI(T, T) : input bytes == output bytes
-    writes a side artifact to --graph-file/-g or similar
-    insertable between N and N+1 without touching contracts
-  }
   class IEmbedderBackend {
     <<interface>>
     +embed_dense_batch(texts) list of 1024-d L2-normalized vectors
@@ -185,7 +174,6 @@ namespace PublicCLI {
   class rag_p02 { Phase01 to Phase02 ; HTML to Markdown }
   class rag_p03 { Phase02 to Phase03 ; AST header paths }
   class rag_p04 { Phase03 to Phase04 ; --max-words/-m --overlap/-v --strategy/-s }
-  class rag_p04b { Phase04 to Phase04 ; --graph-file/-g --extractor/-e --min-weight/-w }
   class rag_p05 { Phase04 to Phase05 ; --collection/-c --qdrant-url/-u --qdrant-path/-p --recreate/-r or --append/-a }
   class rag_p06 { Phase05 to Phase06 ; --query/-q ; HyDE + decomposition }
   class rag_p07 { Phase06 to Phase07 ; --prefetch-limit/-l --rrf-k/-k --dense-weight/-d --sparse-weight/-s --top-k/-t }
@@ -231,8 +219,6 @@ rag_p01 ..|> IExecutableStage
 rag_p02 ..|> IExecutableStage
 rag_p03 ..|> IExecutableStage
 rag_p04 ..|> IExecutableStage
-rag_p04b ..|> IExecutableStage
-rag_p04b ..|> IPassThroughStage
 rag_p05 ..|> IExecutableStage
 rag_p06 ..|> IExecutableStage
 rag_p07 ..|> IExecutableStage
@@ -249,7 +235,6 @@ IExecutableStage o-- PhaseCLI : composes one cli_engine
 PhaseCLI ..> BasePhasePayload : validates T_In / T_Out
 PhaseCLI ..> err_console : telemetry only
 rag_p04 ..> chunkers : --strategy
-rag_p04b ..> GraphArtifact : writes side artifact
 rag_p05 ..> hybrid_engine
 rag_p07 ..> hybrid_engine
 rag_p08 ..> hybrid_engine
@@ -263,8 +248,7 @@ rag_p00 ..> rag_p10 : subprocess
 rag_p01 --> rag_p02 : Phase01LoadedOutput
 rag_p02 --> rag_p03 : Phase02MarkdownOutput
 rag_p03 --> rag_p04 : Phase03ParsedOutput
-rag_p04 --> rag_p04b : Phase04ChunkedOutput (optional)
-rag_p04b --> rag_p05 : Phase04ChunkedOutput
+rag_p04 --> rag_p05 : Phase04ChunkedOutput
 rag_p05 --> rag_p06 : Phase05IndexedOutput
 rag_p06 --> rag_p07 : Phase06QueryPlanOutput
 rag_p07 --> rag_p08 : Phase07RetrievedOutput
@@ -280,9 +264,6 @@ note for IStrategy "IN-PHASE STRATEGY BLUEPRINT:
 1. def my_strategy(section, max_words, overlap) -> list[DocumentChunk]
 2. CHUNKERS['my_strategy'] = my_strategy (or entry point in group rag.chunkers once it lands)
 3. rag-p04 -s my_strategy ; output.chunk_strategy == 'my_strategy'"
-note for IPassThroughStage "SIDE-ARTIFACT STAGE BLUEPRINT:
-cli_engine = PhaseCLI(title, PhaseNOutput, PhaseNOutput, default_out)
-upstream = cli_engine.load_upstream(in_file) ; write side file ; cli_engine.emit(upstream, out_file, quiet)"
 ```
 
 ## Relations

@@ -10,8 +10,8 @@ Terms: **RAG** Retrieval-Augmented Generation. **CRAG** Corrective RAG (verdict 
 3. The three laws every phase obeys
 4. Engine: `rag_contracts.py`
 5. Neural engine: `hybrid_engine.py`
-6. Phase-by-phase manual (P01 … P10, P04b, P00)
-7. Pluggability contract (chunker, pass-through stage, new field)
+6. Phase-by-phase manual (P01 … P10, P00)
+7. Pluggability contract (chunker, new field)
 8. Debugging a failed pipe
 9. Verification
 10. File map
@@ -22,14 +22,12 @@ Appendix A. Deferred by design
 
 ## 1. Architecture in one paragraph
 
-Ten standalone command-line programs (`rag-p01` … `rag-p10`), one optional insertable stage (`rag-p04b`), and one loop controller (`rag-p00`). Each program reads one JSON document on stdin (or `--in-file`), validates it against the previous phase's strict Pydantic model, does one job, and writes one JSON document to stdout for the next program. Composition is the UNIX pipe. Phases 01-05 ingest and index a corpus into Qdrant (hybrid dense Jina-v3 + sparse SPLADE). **P05 → P06 carries only the collection name; the chunks reach P07 through Qdrant, not through the pipe.** Phases 06-10 plan a query, retrieve with RRF, cross-encoder rerank, generate an extractive grounded answer with a CRAG verdict, and score it. `rag-p00` runs 06→09 as subprocesses in a loop, reads P09's verdict, rewrites the query until `GROUNDED` or attempts are exhausted, then runs P10.
+Ten standalone command-line programs (`rag-p01` … `rag-p10`) and one loop controller (`rag-p00`). Each program reads one JSON document on stdin (or `--in-file`), validates it against the previous phase's strict Pydantic model, does one job, and writes one JSON document to stdout for the next program. Composition is the UNIX pipe. Phases 01-05 ingest and index a corpus into Qdrant (hybrid dense Jina-v3 + sparse SPLADE). **P05 → P06 carries only the collection name; the chunks reach P07 through Qdrant, not through the pipe.** Phases 06-10 plan a query, retrieve with RRF, cross-encoder rerank, generate an extractive grounded answer with a CRAG verdict, and score it. `rag-p00` runs 06→09 as subprocesses in a loop, reads P09's verdict, rewrites the query until `GROUNDED` or attempts are exhausted, then runs P10.
 
 ```mermaid
 flowchart LR
   P01[rag-p01 load] --> P02[rag-p02 markdown] --> P03[rag-p03 parse] --> P04[rag-p04 chunk --strategy]
   P04 --> P05[rag-p05 index]
-  P04 -. optional insert .-> P04B[rag-p04b pass-through] --> P05
-  P04B -. side artifact .-> G[(04b_graph.json)]
   P05 --> Q[(Qdrant ./qdrant_storage)]
   P05 -- collection name --> P06[rag-p06 query plan] --> P07[rag-p07 RRF retrieve] --> P08[rag-p08 rerank] --> P09[rag-p09 CRAG verdict + answer] --> P10[rag-p10 eval]
   Q --> P07
@@ -45,14 +43,14 @@ flowchart LR
 ```powershell
 # Windows, pwsh 7.4+ (host has 7.6.7): native uv→uv pipes preserve bytes
 uv sync --all-extras                     # never bare `uv sync`: it removes the dev extra (pytest, ruff)
-uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04 -s recursive | uv run rag-p04b | uv run rag-p05 | uv run rag-p06 -q "your question" | uv run rag-p07 | uv run rag-p08 | uv run rag-p09 | uv run rag-p10
+uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04 -s recursive | uv run rag-p05 | uv run rag-p06 -q "your question" | uv run rag-p07 | uv run rag-p08 | uv run rag-p09 | uv run rag-p10
 uv run rag-p00 -i artifacts/05_indexed.json -q "your question" -t 0.92      # CRAG loop against the existing index
 ```
 ```bash
 # Linux/macOS
 uv sync --all-extras
 set -o pipefail
-uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04 -s recursive | uv run rag-p04b | uv run rag-p05 | uv run rag-p06 -q "your question" | uv run rag-p07 | uv run rag-p08 | uv run rag-p09 | uv run rag-p10
+uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04 -s recursive | uv run rag-p05 | uv run rag-p06 -q "your question" | uv run rag-p07 | uv run rag-p08 | uv run rag-p09 | uv run rag-p10
 ```
 fastembed models cache in the system temp dir unless `RAG_FASTEMBED_CACHE_DIR` is set (recommended on Linux/WSL, where temp is wiped on restart); run with `uv run --env-file .env …` or export the variable. Re-run from any persisted artifact: `uv run rag-p07 -i artifacts/06_query_plan.json | uv run rag-p08 | uv run rag-p09`. First run downloads Jina-v3 (~2.3 GB, HuggingFace cache), SPLADE++ and the reranker. `artifacts/05_indexed.json` carries full 1024-d vectors per chunk and is large. Qdrant is embedded at `./qdrant_storage` (no server); set `QDRANT_URL` or `--qdrant-url` for a server, an unreachable URL falls back to embedded. On Windows PowerShell 5.1 or pwsh < 7.4, pipes re-encode text; use the `subprocess.Popen` chain in `verify_pipeline.ps1` Stage 2.
 
@@ -104,8 +102,6 @@ timestamp: str = <UTC ISO 8601>
 | `RetrievedCandidate` | `chunk_id, doc_id, contextualized_text, parent_markdown, dense_score, sparse_score, rrf_fused_score` |
 | `RerankedContextItem` | `chunk_id, doc_id, cross_encoder_score, expanded_parent_context` |
 | `CRAGAttemptRecord` | `attempt: int, query_used, crag_verdict, grounded_confidence, top_chunk_ids: list[str], rewrite_reason: str \| None = None` |
-| `GraphNode` | `entity, chunk_ids: list[str]` |
-| `GraphEdge` | `source, target, weight: int, chunk_ids: list[str]` |
 
 ### 4.4 Phase payloads (the contract chain)
 | # | Model | `phase_name` | Fields beyond base |
@@ -114,7 +110,6 @@ timestamp: str = <UTC ISO 8601>
 | 02 | `Phase02MarkdownOutput` | `02_preprocess_md` | `documents: list[MarkdownDocument]` |
 | 03 | `Phase03ParsedOutput` | `03_parsing` | `sections: list[ParsedSection]` |
 | 04 | `Phase04ChunkedOutput` | `04_chunking` | `chunks: list[DocumentChunk]`, `chunk_strategy: str = "sliding_window"` |
-| 04b | `GraphArtifact` (side artifact, not in chain) | `04b_graph` | `extractor: str, nodes: list[GraphNode], edges: list[GraphEdge]` |
 | 05 | `Phase05IndexedOutput` | `05_contextual_index` | `qdrant_collection: str, indexed_records: list[EnrichedIndexedChunk]` |
 | 06 | `Phase06QueryPlanOutput` | `06_query_orchestration` | `original_query, route, sub_queries: list[str], hyde_passage, metadata_filters: dict[str, Any], qdrant_collection: str` |
 | 07 | `Phase07RetrievedOutput` | `07_hybrid_retrieval` | `query_plan: Phase06QueryPlanOutput, candidates: list[RetrievedCandidate]` |
@@ -123,7 +118,7 @@ timestamp: str = <UTC ISO 8601>
 | 10 | `Phase10EvalOutput` | `10_telemetry_eval` | `ndcg_at_k, context_precision, faithfulness_score, answer_relevance: float, hallucination_detected: bool, final_answer` |
 | 00 | `PhaseCRAGLoopOutput` | `00_crag_orchestrator` | `initial_query, final_query, total_attempts: int, converged: bool, attempts_history: list[CRAGAttemptRecord], final_generation: Phase09GenerationOutput, final_evaluation: Phase10EvalOutput` |
 
-Chain: `None → 01 → 02 → 03 → 04 → (04b: 04 → 04) → 05 → 06 → 07 → 08 → 09 → 10`; `rag-p00`: `05 → 00`. Nesting: 06 is embedded in 07; 09 and 10 are embedded in 00. Changing a nested model changes the outer payloads too.
+Chain: `None → 01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09 → 10`; `rag-p00`: `05 → 00`. Nesting: 06 is embedded in 07; 09 and 10 are embedded in 00. Changing a nested model changes the outer payloads too.
 
 ---
 
@@ -170,13 +165,6 @@ Common options unless noted: `--in-file/-i PATH` (else stdin), `--out-file/-o PA
 - Options: `--max-words/-m INT` (60, `min=1`), `--overlap/-v INT` (12, unbounded: `>= max_words` gives step 1 and a chunk explosion; negative skips words), `--strategy/-s NAME` (`sliding_window`; help lists `sorted(CHUNKERS)`).
 - Order: resolve strategy **before** reading stdin (unknown → exit 2, stderr `Unknown chunker 'x'. Known: recursive, sliding_window`, stdout empty) → `load_upstream` → `chunks = [c for sec in sections for c in chunker(sec, max_words, overlap)]` → emit with `chunk_strategy=strategy`.
 - Every chunk: `parent_markdown = f"### {' > '.join(header_path)}\n{body}"` (parent-document retrieval), `token_count = len(words)`.
-
-### P04b `rag-p04b` / `p04b_graph.py` (insertable pass-through)
-- In `Phase04ChunkedOutput` → Out **the same object, unchanged** (`cli_engine.emit(upstream, ...)`; stdout byte-identical to a `rag-p*` input) → `artifacts/04b_passthrough.json`. Side artifact `GraphArtifact` → `--graph-file/-g` (`artifacts/04b_graph.json`), `run_id = upstream.run_id`.
-- Options: `-i`, `-o`, `-g`, `--extractor/-e` (only `heuristic`; other → exit 2, before stdin), `--min-weight/-w INT` (1, `min=1`), `-q`.
-- `extract_entities_heuristic(text)`: regex `\b[A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+)*\b`; strips leading stopword tokens `{The, An, This, It, In, On, For, And, But}` from each match ("The Qdrant" becomes "Qdrant"; a match that is only stopwords is dropped); order-preserving dedupe.
-- `build_graph(chunks, min_weight=1)`: node per entity with its `chunk_ids`; edge per unordered entity pair co-occurring in a chunk, `weight` = number of chunks, `source < target`, sorted `(-weight, source, target)`, edges below `min_weight` dropped.
-- Consumer: none yet (P07 one-hop expansion deferred). Insert as `rag-p04 | rag-p04b | rag-p05`.
 
 ### P05 `rag-p05` / `p05_index.py`
 - In `Phase04ChunkedOutput` → Out `Phase05IndexedOutput` (`artifacts/05_indexed.json`).
@@ -235,13 +223,7 @@ Rules: unique id prefix per strategy (`_chk_`, `_rec_` taken); `chunk_id` unique
 - `sliding_window`: `_windows(body.split(), max_words, overlap)`, ids `{section_id}_chk_{i}`; empty body → no chunks; the tail window can be a subset of the previous one (e.g. 60 words at 60/12 → windows 0:60 and 48:60; tests lock this).
 - `recursive`: split on `\n\n` (never fires on pipeline input because P03 drops blank lines, so it is whole-section-or-sentences there); paragraph > `max_words` → split on `(?<=[.!?])\s+`; sentence > `max_words` → `_windows(words, max_words, 0)`; no packing; one running counter `{section_id}_rec_{n}`; `overlap` ignored.
 
-### 7.2 Insert a pass-through stage (reference: `p04b_graph.py`)
-1. `cli_engine = PhaseCLI(title, PhaseNOutput, PhaseNOutput, "artifacts/NNx_passthrough.json")`.
-2. Resolve option choices, then `upstream = cli_engine.load_upstream(in_file)`; do the work; write side artifacts with their own strict model and `run_id=upstream.run_id`, `encoding="utf-8"`; stderr panel via `err_console`.
-3. `cli_engine.emit(upstream, out_file, quiet)` with the **same object** (never rebuild it: defaults such as `chunk_strategy` would silently reset).
-4. Register: `[project.scripts] rag-pNNx = "module:app"`; add the module to `[tool.hatch.build.targets.wheel].include`; add it to the Stage 0 no-`print()` list and the chain-identity list in **both** `verify_pipeline.ps1` and `verify_pipeline.sh`; `uv sync --all-extras`; add a test (byte-identical pass-through).
-
-### 7.3 Add a field to a Phase model
+### 7.2 Add a field to a Phase model
 Give it a default (`Field(default_factory=list)` for mutables); the default must match the type exactly (strict mode); remember the nesting (06 in 07; 09, 10 in 00); update the README phase table; accept that older consumers reject artifacts carrying the field.
 
 ---
@@ -263,7 +245,7 @@ Give it a default (`Field(default_factory=list)` for mutables); the default must
 |---|---|---|
 | Unit/integration | `uv run pytest -q` | all pass (one live Qdrant test, ~5 min) |
 | Lint | `uv run ruff check .` | clean (line-length 100, py311) |
-| Battery, Windows | `pwsh -File verify_pipeline.ps1 [-SkipSync/-s] [-Quiet/-q] [-Help/-h]` | writes `artifacts/verify_ps1_<ts>.log`, deletes `artifacts/` and `qdrant_storage/`, then Stage 0 static (AST no-`print()` audit over all phase modules + `chunkers.py` + `p04b_graph.py`; `client.close()` present in p05/p07; contract-chain identity incl. `p04b_graph`), Stage 1 isolated runs of every phase through `Invoke-Phase` (every exit code checked, stderr tail on failure) incl. `rag-p04 -s recursive` → `artifacts/04_chunked_recursive.json` and `rag-p04b`, plus the negative `rag-p04 -s nope` (exit 2, `Known:` on stderr, empty stdout), Stage 2 full 10-phase pipe with every stage's exit checked (without p04b), Stage 3a `rag-p00 --crag-threshold 0.92 --max-retries 2` stress run (schema only) and 3b `rag-p00` at defaults asserting `converged == true` and `GROUNDED` |
+| Battery, Windows | `pwsh -File verify_pipeline.ps1 [-SkipSync/-s] [-Quiet/-q] [-Help/-h]` | writes `artifacts/verify_ps1_<ts>.log`, deletes `artifacts/` and `qdrant_storage/`, then Stage 0 static (AST no-`print()` audit over all phase modules + `chunkers.py`; `client.close()` present in p05/p07; contract-chain identity), Stage 1 isolated runs of every phase through `Invoke-Phase` (every exit code checked, stderr tail on failure) incl. `rag-p04 -s recursive` → `artifacts/04_chunked_recursive.json`, plus the negative `rag-p04 -s nope` (exit 2, `Known:` on stderr, empty stdout), Stage 2 full 10-phase pipe with every stage's exit checked, Stage 3a `rag-p00 --crag-threshold 0.92 --max-retries 2` stress run (schema only) and 3b `rag-p00` at defaults asserting `converged == true` and `GROUNDED` |
 | Battery, bash | `./verify_pipeline.sh [-s/--skip-sync] [-q/--quiet] [-h/--help]` | identical stages (`run_phase` wrapper, `PIPESTATUS` on the pipe, `utf-8-sig` validator, transcript `artifacts/verify_sh_<ts>.log`); on the Windows host run it on real Linux via WSL: `wsl -d Ubuntu-24.04 --exec bash -lc "export PATH=$HOME/.local/bin:$PATH UV_PROJECT_ENVIRONMENT=$HOME/.venvs/<name> RAG_FASTEMBED_CACHE_DIR=$HOME/.cache/fastembed HF_HUB_DISABLE_XET=1; cd /mnt/c/<path> && uv sync --all-extras && ./verify_pipeline.sh"` |
 
 Negative tests are first-class: PASS means exactly the declared failure occurred.
@@ -278,9 +260,8 @@ Negative tests are first-class: PASS means exactly the declared failure occurred
 | `hybrid_engine.py` | embedders, Qdrant client/collection, UUIDv5, reranker |
 | `chunkers.py` | chunker registry |
 | `p01_load.py` … `p10_evaluate.py` | the ten phases |
-| `p04b_graph.py` | insertable GraphRAG pass-through stage |
 | `p00_crag_orchestrator.py` | subprocess loop controller |
-| `pyproject.toml` | deps (pydantic ≥2.9, typer ≥0.12.5, rich ≥13.9, qdrant-client ≥1.17, fastembed, sentence-transformers …), `[project.scripts]` `rag-p00`…`rag-p10`, `rag-p04b`, wheel include list |
+| `pyproject.toml` | deps (pydantic ≥2.9, typer ≥0.12.5, rich ≥13.9, qdrant-client ≥1.17, fastembed, sentence-transformers …), `[project.scripts]` `rag-p00`…`rag-p10`, wheel include list |
 | `verify_pipeline.ps1` / `.sh` | live batteries |
 | `tests/` | pytest suites |
 | `README.md` | per-phase walkthrough and the "Pluggability" section |
@@ -294,16 +275,15 @@ Negative tests are first-class: PASS means exactly the declared failure occurred
 
 1. stdout is JSON only; use `err_console` for anything human-readable.
 2. Keep the chain identity (`output_model is input_model`); new fields get defaults.
-3. A pass-through stage emits the upstream object, never a rebuilt one.
-4. `chunk_id` unique per run; `section_id` embeds `doc_id`; no empty-text chunks.
-5. Resolve CLI choices before reading stdin so negatives fail fast with exit 2.
-6. Batch-encode the corpus once; one Qdrant client per process; `client.close()` before `emit`; never run two processes against one `./qdrant_storage`; `recreate` at most once per run.
-7. All file writes `encoding="utf-8"`.
-8. `uv sync --all-extras`, never bare `uv sync`.
-9. Windows host: PowerShell only; `verify_pipeline.sh` is edited in lockstep and executed elsewhere.
+3. `chunk_id` unique per run; `section_id` embeds `doc_id`; no empty-text chunks.
+4. Resolve CLI choices before reading stdin so negatives fail fast with exit 2.
+5. Batch-encode the corpus once; one Qdrant client per process; `client.close()` before `emit`; never run two processes against one `./qdrant_storage`; `recreate` at most once per run.
+6. All file writes `encoding="utf-8"`.
+7. `uv sync --all-extras`, never bare `uv sync`.
+8. Windows host: PowerShell only; `verify_pipeline.sh` is edited in lockstep and executed elsewhere.
 
 ---
 
 ## Appendix A. Deferred by design
 
-Recorded in the plan (YAGNI): `importlib.metadata` entry-point discovery for third-party chunkers; LLM contextual-prefix chunker; P07 one-hop graph expansion (the consumer of `04b_graph.json`); late chunking; ColBERT multivector slot; Qdrant `FormulaQuery` boosting. The original Blackboard-envelope/async-plugin proposal (`docs/rag_plugin_evolution_architecture.md`, on `main`) was audited by two independent reviewers and rejected: it did not import, wiped the index per chunk, and regressed retrieval.
+Recorded in the plan (YAGNI): `importlib.metadata` entry-point discovery for third-party chunkers; LLM contextual-prefix chunker; late chunking; ColBERT multivector slot; Qdrant `FormulaQuery` boosting. The original Blackboard-envelope/async-plugin proposal (`docs/rag_plugin_evolution_architecture.md`, on `main`) was audited by two independent reviewers and rejected: it did not import, wiped the index per chunk, and regressed retrieval.

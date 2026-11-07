@@ -31,7 +31,6 @@ rag-p01 = "p01_load:app"
 rag-p02 = "p02_markdown:app"
 rag-p03 = "p03_parse:app"
 rag-p04 = "p04_chunk:app"
-rag-p04b = "p04b_graph:app"
 rag-p05 = "p05_index:app"
 rag-p06 = "p06_query:app"
 rag-p07 = "p07_retrieve:app"
@@ -48,7 +47,6 @@ include = [
     "p02_markdown.py",
     "p03_parse.py",
     "p04_chunk.py",
-    "p04b_graph.py",
     "chunkers.py",
     "model_fetch.py",
     "p05_index.py",

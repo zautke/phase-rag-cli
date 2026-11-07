@@ -323,12 +323,6 @@ Every phase reads one strict JSON contract on stdin and writes the next on stdou
 
 - **Chunking strategy.** `rag-p04 --strategy NAME` picks a chunker from the registry in `chunkers.py` (`sliding_window`, `recursive`). The chosen name is recorded in `Phase04ChunkedOutput.chunk_strategy`. Artifacts written before this field existed still validate (default `sliding_window`). To add a chunker, write a `(section, max_words, overlap) -> list[DocumentChunk]` function and register it in `CHUNKERS`. Chunk ids must be unique per section, because they derive the Qdrant point ids.
 - **External stage drop-in via pipe.** Any program that reads `Phase04ChunkedOutput` JSON on stdin and writes the same schema on stdout can sit between `rag-p04` and `rag-p05`. Nothing else changes.
-- **Pass-through stage pattern.** `rag-p04b` takes `Phase04ChunkedOutput` and emits it with its fields intact (it re-emits the validated payload, byte-identical when the input came from a `rag-p*` stage, so `chunk_strategy` and `run_id` survive). As a side effect it writes `artifacts/04b_graph.json`, an entity co-occurrence graph (`GraphArtifact`: nodes, weighted edges, chunk ids) built with a heuristic extractor. Use this pattern for any stage that observes the stream and produces a side artifact.
-
-  ```powershell
-  uv run rag-p04 -i artifacts/03_parsed.json -s recursive | uv run rag-p04b -g artifacts/04b_graph.json | uv run rag-p05
-  ```
-- **Deferred.** Nothing reads `04b_graph.json` yet. Graph-based one-hop expansion in `rag-p07` is intentionally not built.
 - **Contract change.** `Phase06QueryPlanOutput` carries `qdrant_collection` instead of the full P05 payload, so P06 output no longer embeds indexed records. Older 06/07 artifacts with `index_snapshot` are rejected; regenerate them.
 
 ---
