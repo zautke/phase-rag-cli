@@ -2,7 +2,7 @@
 
 ## 0.2.0 — 2026-11-07 (merge into development)
 
-**Re-index required.** fastembed 0.9 raises the SPLADE max token length 128 -> 512, and the fastembed cache moved into the Hugging Face hub cache (`HF_HUB_CACHE`). Existing Qdrant collections hold stale sparse vectors: rebuild them with `rag-p05`.
+**Re-index required.** fastembed 0.9 raises the SPLADE max token length 128 -> 512, and the fastembed cache moved into the Hugging Face hub cache (`HF_HUB_CACHE`). Existing Qdrant collections hold stale sparse vectors: rebuild them with `rag-p05`. P05 and P06 artifacts written before this release lack the new `dense_backend` / `dense_model` / `sparse_model` fields and are rejected: regenerate them.
 
 ### Added
 - Dense, sparse and rerank backends are named plugins (`hybrid_engine.py` name -> loader dicts). P05: `-b/--dense-backend` (`sentence_transformers` default | `fastembed`), `-m/--dense-model`, `-s/--sparse-model`; P08: `-b/--backend` (`fastembed` default | `sentence_transformers`). Defaults come from `.env.example` (`RAG_DENSE_BACKEND`, `RAG_DENSE_MODEL`, `RAG_SPARSE_MODEL`, `RAG_CRAG_THRESHOLD`, `QDRANT_PATH`).
@@ -18,7 +18,6 @@
 - p00 `--max-retries N` means N retries after the first attempt (default 2); child stderr is inherited; rewrites use anchors actually present in the corpus and stop when anchors are exhausted; the demo-corpus rewrite fallbacks are gone.
 - P08 emits `rank="N"` on each context; P10 computes nDCG in rank order.
 - Every CLI shows `Usage()` as its `--help` epilog; a missing `--in-file` is a usage error and stdin is read once.
-- `.gitignore` covers `verify_logs/`.
 
 ### Fixed
 - D10: `rag-p04 --overlap` must be `>= 0` and `< --max-words` (exit 2, empty stdout otherwise); the final window no longer duplicates its predecessor.
