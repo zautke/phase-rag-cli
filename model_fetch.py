@@ -2,7 +2,8 @@
 # model_fetch.py
 """Fetch model files with aria2c into the Hugging Face cache layout, reporting progress on stderr.
 
-Files land in <cache>/models--<org>--<name>/snapshots/<sha>/ with refs/main -> <sha>, so
+Files land in <cache>/models--<org>--<name>/snapshots/<sha>/; refs/main -> <sha> and a .complete marker are
+written only after every file is size-verified, so
 huggingface_hub, transformers, sentence-transformers and fastembed find them locally and
 download nothing themselves. stdout is never written (Tri-Plex I/O).
 """
@@ -20,18 +21,28 @@ from pathlib import Path
 from huggingface_hub import HfApi, constants
 from huggingface_hub.file_download import repo_folder_name
 
-INSTALL_HINT = "winget install aria2.aria2 | sudo apt-get install -y aria2 | brew install aria2"
+COMPLETE = ".complete"  # snapshot marker: one line per include/exclude filter set that was size-verified
+INSTALL_HINT = (
+    "winget install aria2.aria2 (Windows) | "
+    "sudo apt-get -o Acquire::ForceIPv4=true install aria2 (Debian/Ubuntu) | brew install aria2 (macOS)"
+)
 
 
 def _log(msg: str) -> None:
     print(f"[model-fetch] {msg}", file=sys.stderr, flush=True)
 
 
-def _cached_snapshot(root: Path) -> Path | None:
+def _signature(include: tuple[str, ...], exclude: tuple[str, ...]) -> str:
+    return "|".join(include) + " !" + "|".join(exclude)
+
+
+def _cached_snapshot(root: Path, sig: str) -> Path | None:
+    """The snapshot refs/main names, only if an earlier fetch with this filter verified it."""
     ref = root / "refs" / "main"
     if ref.is_file():
         snap = root / "snapshots" / ref.read_text().strip()
-        if snap.is_dir():
+        marker = snap / COMPLETE
+        if marker.is_file() and sig in marker.read_text(encoding="utf-8").splitlines():
             return snap
     return None
 
@@ -44,19 +55,13 @@ def ensure_model(
 ) -> Path:
     """Make every repo file matching include/exclude present locally; return the snapshot dir."""
     root = Path(cache_dir or constants.HF_HUB_CACHE) / repo_folder_name(repo_id=repo_id, repo_type="model")
+    sig = _signature(include, exclude)
+    snap = _cached_snapshot(root, sig)  # verified earlier: no hub call, works offline
+    if snap is not None:
+        return snap
     if constants.HF_HUB_OFFLINE:
-        snap = _cached_snapshot(root)
-        if snap is None:
-            raise RuntimeError(f"{repo_id} not cached under {root} and HF_HUB_OFFLINE is set")
-        return snap
-    try:
-        info = HfApi().model_info(repo_id, files_metadata=True)
-    except Exception as exc:  # network down: a complete earlier fetch is still usable
-        snap = _cached_snapshot(root)
-        if snap is None:
-            raise
-        _log(f"{repo_id}: hub unreachable ({type(exc).__name__}); using cached {snap.name[:7]}")
-        return snap
+        raise RuntimeError(f"{repo_id} not cached (verified) under {root} and HF_HUB_OFFLINE is set")
+    info = HfApi().model_info(repo_id, files_metadata=True, timeout=constants.HF_HUB_ETAG_TIMEOUT)
 
     snap = root / "snapshots" / str(info.sha)
     files = [
@@ -74,22 +79,30 @@ def ensure_model(
             if s.size is not None and size > s.size:
                 path.unlink()  # larger than remote: corrupt, cannot resume
             missing.append(s)
+    if missing:
+        _download(repo_id, str(info.sha), snap, missing)
+    # refs/main + marker only after every file is size-verified: a killed fetch leaves neither
+    snap.mkdir(parents=True, exist_ok=True)
     (root / "refs").mkdir(parents=True, exist_ok=True)
     (root / "refs" / "main").write_text(str(info.sha))
-    if not missing:
-        return snap
+    with (snap / COMPLETE).open("a", encoding="utf-8") as fh:
+        fh.write(sig + "\n")
+    return snap
 
+
+def _download(repo_id: str, sha: str, snap: Path, missing: list) -> None:
     aria2 = shutil.which("aria2c")
-    if not aria2:
-        raise RuntimeError(f"aria2c not found on PATH; install it: {INSTALL_HINT}")
+    if not aria2:  # org rule: aria2c only, no fallback downloader
+        _log(f"aria2c not found on PATH; install it: {INSTALL_HINT}")
+        raise SystemExit(1)
     total_mb = sum(s.size or 0 for s in missing) / 1e6
-    _log(f"{repo_id}@{str(info.sha)[:7]}: downloading {len(missing)} file(s), {total_mb:.1f} MB -> {snap} (aria2c)")
+    _log(f"{repo_id}@{sha[:7]}: downloading {len(missing)} file(s), {total_mb:.1f} MB -> {snap} (aria2c)")
     for s in missing:
         _log(f"  {s.rfilename} ({(s.size or 0) / 1e6:.1f} MB)")
     lines: list[str] = []
     token = os.environ.get("HF_TOKEN")
     for s in missing:
-        lines += [f"{constants.ENDPOINT}/{repo_id}/resolve/{info.sha}/{s.rfilename}", f"  out={s.rfilename}"]
+        lines += [f"{constants.ENDPOINT}/{repo_id}/resolve/{sha}/{s.rfilename}", f"  out={s.rfilename}"]
         if token:
             lines.append(f"  header=Authorization: Bearer {token}")
     with tempfile.NamedTemporaryFile("w", suffix=".aria2", delete=False, encoding="utf-8") as fh:
@@ -114,4 +127,3 @@ def ensure_model(
     if rc != 0 or bad:
         raise RuntimeError(f"aria2c exit {rc} fetching {repo_id}; incomplete: {bad or 'see log above'}")
     _log(f"{repo_id}: done, {total_mb:.1f} MB in {time.monotonic() - started:.1f} s")
-    return snap
