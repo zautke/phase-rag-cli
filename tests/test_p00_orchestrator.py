@@ -158,3 +158,99 @@ def test_d12_negative_retries_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path
     h = Harness(monkeypatch, tmp_path)
     assert h.run("-r", "-1").exit_code == 2
     assert h.calls == []
+
+
+# --- D7: anchors used are the only ones marked seen; no domain fallback; HyDE is corpus-agnostic --
+DOMAIN_WORDS = ("qdrant", "hnsw", "splade", "fusion", "crag", "cross-encoder", "chunking")
+
+
+def p08_with(text: str) -> rc.Phase08RerankedOutput:
+    ctx = rc.RerankedContextItem(
+        chunk_id="c", doc_id="d", cross_encoder_score=0.1, expanded_parent_context=text
+    )
+    return rc.Phase08RerankedOutput(
+        run_id="r", original_query="q", xml_context_block="<retrieved_context>\n</retrieved_context>",
+        top_contexts=[ctx],
+    )
+
+
+def test_d7_only_used_anchors_become_seen() -> None:
+    seen: set[str] = set()
+    got = p00.synthesize_rewritten_query("why", "why", 1, p08_with(fresh_context(1)), seen)
+    assert got is not None
+    query, _ = got
+    used = {f"anchor1word{i}" for i in range(4)}
+    assert seen == used
+    assert all(w in query for w in used)
+    assert "anchor1word4" not in query
+
+
+def test_d7_unused_terms_stay_available_for_next_attempt() -> None:
+    seen: set[str] = set()
+    p08 = p08_with(fresh_context(1))
+    first = p00.synthesize_rewritten_query("why", "why", 1, p08, seen)
+    second = p00.synthesize_rewritten_query("why", "why", 2, p08, seen)
+    assert first is not None and second is not None
+    assert all(f"anchor1word{i}" in second[0] for i in range(4, 8))
+
+
+def test_d7_no_new_anchors_returns_none_without_domain_fallback() -> None:
+    seen: set[str] = set()
+    assert p00.synthesize_rewritten_query("why", "why", 1, p08_with("the and for it is"), seen) is None
+    assert p00.synthesize_rewritten_query("why", "why", 2, p08_with(""), seen) is None
+    assert seen == set()
+
+
+def test_d7_loop_stops_and_reports_non_convergence_without_anchors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    h = Harness(monkeypatch, tmp_path, ctx_fn=lambda n: "the and for it is")
+    res = h.run()
+    assert res.exit_code == 0, res.output
+    loop = h.loop()
+    assert h.count("p06_query.py") == 1
+    assert loop.total_attempts == 1 and not loop.converged
+    assert "no new" in (loop.attempts_history[0].rewrite_reason or "").lower()
+    assert loop.final_query == loop.initial_query
+
+
+def test_d7_loop_stops_when_corpus_anchors_are_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    h = Harness(monkeypatch, tmp_path, ctx_fn=lambda n: fresh_context(1))  # same 8 words each time
+    assert h.run("-r", "5").exit_code == 0
+    # attempt 1 uses words 0-3, attempt 2 words 4-7, attempt 3 finds none -> stop (not 6 attempts)
+    assert h.count("p06_query.py") == 3
+    loop = h.loop()
+    assert loop.total_attempts == 3 and not loop.converged
+
+
+def test_d7_rewrites_carry_no_hardcoded_domain_vocabulary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    h = Harness(monkeypatch, tmp_path)
+    assert h.run("-r", "2", "-q", "How hot is boiling water?").exit_code == 0
+    for rec in h.loop().attempts_history:
+        low = (rec.query_used + (rec.rewrite_reason or "")).lower()
+        assert not any(w in low for w in DOMAIN_WORDS), low
+
+
+def test_d7_hyde_passage_is_corpus_agnostic(tmp_path: Path) -> None:
+    import p06_query
+
+    f05 = tmp_path / "05.json"
+    f05.write_text(
+        rc.Phase05IndexedOutput(
+            run_id="r", qdrant_collection="c", indexed_records=[],
+            dense_backend="sentence_transformers", dense_model="d", sparse_model="s",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    out = tmp_path / "06.json"
+    res = CliRunner().invoke(
+        p06_query.app, ["-i", str(f05), "-o", str(out), "-s", "-q", "How hot is boiling water?"]
+    )
+    assert res.exit_code == 0, res.output
+    hyde = rc.Phase06QueryPlanOutput.model_validate_json(out.read_text(encoding="utf-8")).hyde_passage
+    assert "boiling water" in hyde
+    assert not any(w in hyde.lower() for w in (*DOMAIN_WORDS, "hybrid", "rrf", "reciprocal"))

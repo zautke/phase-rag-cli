@@ -65,10 +65,7 @@ def main(
     sub_queries = [
         q.strip() for q in query.replace(" and ", " | ").split("|") if q.strip()
     ]
-    hyde_passage = (
-        f"Technical specification answering '{query}': Hybrid RAG combines Qdrant HNSW dense embeddings "
-        f"with SPLADE sparse vectors via Reciprocal Rank Fusion (RRF) and verifies relevance via CRAG."
-    )
+    hyde_passage = f"A concise, factual passage from the source documents that directly answers: {query}"
 
     output = Phase06QueryPlanOutput(
         run_id=upstream.run_id,

@@ -83,10 +83,11 @@ def synthesize_rewritten_query(
     attempt: int,
     p08_out: Phase08RerankedOutput,
     seen_terms: set[str],
-) -> tuple[str, str]:
+) -> tuple[str, str] | None:
     """
     Diagnoses why the cross-encoder confidence fell below the CRAG threshold and
     synthesizes an expanded, disambiguated query for the next P06 -> P09 iteration.
+    Returns None when the retrieved context has no new anchor terms (retrying cannot help).
     """
     # Extract high-signal domain terms from the partial retrieved context that weren't in the query
     stop_words = {
@@ -110,27 +111,25 @@ def synthesize_rewritten_query(
         "document",
         "retrieved_context",
     }
-    context_tokens: list[str] = []
-    for item in p08_out.top_contexts:
-        for raw_tok in item.expanded_parent_context.replace("\n", " ").split():
-            clean = raw_tok.strip(".,;:()[]{}<>\"'#*").lower()
-            if (
-                len(clean) >= 4
-                and clean not in stop_words
-                and clean not in seen_terms
-                and clean not in current_query.lower()
-            ):
-                context_tokens.append(clean)
-                seen_terms.add(clean)
-
-    # Pick top diagnostic anchor terms discovered in the corpus
-    anchor_terms = context_tokens[:4]
-    if attempt == 1:
-        expansion = (
-            " ".join(anchor_terms)
-            if anchor_terms
-            else "Qdrant HNSW dense SPLADE sparse Reciprocal Rank Fusion CRAG"
+    query_lower = current_query.lower()
+    candidates = (
+        raw_tok.strip(".,;:()[]{}<>\"'#*").lower()
+        for item in p08_out.top_contexts
+        for raw_tok in item.expanded_parent_context.replace("\n", " ").split()
+    )
+    anchor_terms = list(
+        dict.fromkeys(
+            c
+            for c in candidates
+            if len(c) >= 4 and c not in stop_words and c not in seen_terms and c not in query_lower
         )
+    )[:4]
+    if not anchor_terms:
+        return None  # corpus offers nothing new: caller stops retrying
+    seen_terms.update(anchor_terms)  # only the anchors actually used
+
+    expansion = " ".join(anchor_terms)
+    if attempt == 1:
         rewritten = f"{initial_query} (specifically addressing: {expansion})"
         top_score = (
             p08_out.top_contexts[0].cross_encoder_score
@@ -139,20 +138,15 @@ def synthesize_rewritten_query(
         )
         reason = (
             f"Attempt 1 confidence ({top_score:.4f}) < threshold; "
-            f"injected corpus-grounded lexical anchors [{', '.join(anchor_terms) or 'domain defaults'}]."
+            f"injected corpus-grounded lexical anchors [{expansion.replace(' ', ', ')}]."
         )
     else:
-        expansion = (
-            " ".join(anchor_terms)
-            if anchor_terms
-            else "cross-encoder score threshold query rewrite loop late chunking"
-        )
         rewritten = (
             f"Technical architecture specification for {initial_query} including {expansion}"
         )
         reason = (
             f"Attempt {attempt} remained below threshold; reformulated into explicit "
-            f"technical specification query with expanded terms [{', '.join(anchor_terms) or 'fallback expansion'}]."
+            f"technical specification query with expanded terms [{expansion.replace(' ', ', ')}]."
         )
 
     return rewritten, reason
@@ -398,41 +392,41 @@ def main(
             break
 
         # Verdict == REWRITE_REQUIRED
-        if attempt < max_attempts:
-            next_query, reason = synthesize_rewritten_query(
+        rewrite = (
+            synthesize_rewritten_query(
                 initial_query=query,
                 current_query=current_query,
                 attempt=attempt,
                 p08_out=p08_out,
                 seen_terms=seen_expansion_terms,
             )
-            attempts_history.append(
-                CRAGAttemptRecord(
-                    attempt=attempt,
-                    query_used=current_query,
-                    crag_verdict=p09_out.crag_verdict,
-                    grounded_confidence=p09_out.grounded_confidence,
-                    top_chunk_ids=[c.chunk_id for c in p08_out.top_contexts],
-                    rewrite_reason=reason,
-                )
-            )
-            if not quiet:
-                err_console.print(
-                    f"[bold red]⚠ CRAG Verdict: REWRITE_REQUIRED[/bold red] "
-                    f"(score={p09_out.grounded_confidence:.4f} < {crag_threshold:.4f})\n"
-                    f"[bold yellow]↻ Rewriting Query ->[/bold yellow] {escape(next_query)}"
-                )
-            current_query = next_query
+            if attempt < max_attempts
+            else None
+        )
+        if attempt >= max_attempts:
+            reason = "Max retries exhausted; proceeding with best available context."
+        elif rewrite is None:
+            reason = "No new corpus anchor terms to expand the query; stopping retries (not converged)."
         else:
-            attempts_history.append(
-                CRAGAttemptRecord(
-                    attempt=attempt,
-                    query_used=current_query,
-                    crag_verdict=p09_out.crag_verdict,
-                    grounded_confidence=p09_out.grounded_confidence,
-                    top_chunk_ids=[c.chunk_id for c in p08_out.top_contexts],
-                    rewrite_reason="Max retries exhausted; proceeding with best available context.",
-                )
+            reason = rewrite[1]
+        attempts_history.append(
+            CRAGAttemptRecord(
+                attempt=attempt,
+                query_used=current_query,
+                crag_verdict=p09_out.crag_verdict,
+                grounded_confidence=p09_out.grounded_confidence,
+                top_chunk_ids=[c.chunk_id for c in p08_out.top_contexts],
+                rewrite_reason=reason,
+            )
+        )
+        if rewrite is None:
+            break
+        current_query = rewrite[0]
+        if not quiet:
+            err_console.print(
+                f"[bold red]⚠ CRAG Verdict: REWRITE_REQUIRED[/bold red] "
+                f"(score={p09_out.grounded_confidence:.4f} < {crag_threshold:.4f})\n"
+                f"[bold yellow]↻ Rewriting Query ->[/bold yellow] {escape(current_query)}"
             )
 
     if p09_out is None:
