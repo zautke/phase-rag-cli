@@ -58,6 +58,23 @@ def apply_lost_in_the_middle_ordering(
     return left + list(reversed(right))
 
 
+def assemble_xml_context(selected: list[RerankedContextItem], reorder_litm: bool) -> str:
+    """<retrieved_context> block; `selected` is in cross-encoder order and each <document> carries
+    its 1-based cross-encoder rank, so the block's physical order may differ without losing it."""
+    rank = {id(item): n for n, item in enumerate(selected, start=1)}
+    ordered = apply_lost_in_the_middle_ordering(selected) if reorder_litm else selected
+    parts = ["<retrieved_context>"]
+    for item in ordered:
+        parts.append(
+            f'  <document id="{item.doc_id}" chunk_id="{item.chunk_id}" rank="{rank[id(item)]}" '
+            f'rerank_score="{item.cross_encoder_score:.4f}">\n'
+            f"    {item.expanded_parent_context}\n"
+            f"  </document>"
+        )
+    parts.append("</retrieved_context>")
+    return "\n".join(parts)
+
+
 @app.command()
 def main(
     in_file: Annotated[
@@ -191,23 +208,10 @@ def main(
         selected = scored_items[:top_n]
 
     # 4. Assemble XML Context Block (with optional Lost-in-the-Middle attention ordering)
-    xml_ordered_items = (
-        apply_lost_in_the_middle_ordering(selected) if reorder_litm else selected
-    )
-
-    xml_parts = ["<retrieved_context>"]
-    for item in xml_ordered_items:
-        xml_parts.append(
-            f'  <document id="{item.doc_id}" chunk_id="{item.chunk_id}" rerank_score="{item.cross_encoder_score:.4f}">\n'
-            f"    {item.expanded_parent_context}\n"
-            f"  </document>"
-        )
-    xml_parts.append("</retrieved_context>")
-
     output = Phase08RerankedOutput(
         run_id=upstream.run_id,
         original_query=query,
-        xml_context_block="\n".join(xml_parts),
+        xml_context_block=assemble_xml_context(selected, reorder_litm),
         top_contexts=selected,
     )
     cli_engine.emit(output, out_file, quiet)

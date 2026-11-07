@@ -25,13 +25,21 @@ def Usage() -> str:
     )
 
 
+# Opening <document> tag lines emitted by P08 (exactly two-space indent, start of line): body text
+# that merely looks like a tag is not matched.
+DOCUMENT_TAG = re.compile(
+    r'^ {2}<document\b[^>\n]*\brank="(\d+)"[^>\n]*\brerank_score="(-?[0-9.]+)"', re.MULTILINE
+)
+
+
 def compute_ndcg_at_k(xml_context_block: str) -> float:
     """
-    Computes normalized Discounted Cumulative Gain (nDCG) of the candidate order
-    observed in xml_context_block against an ideally sorted order based on rerank_score.
+    Computes normalized Discounted Cumulative Gain (nDCG) of the contexts taken in cross-encoder
+    rank order (the rank="N" attribute, not their physical order after Lost-in-the-Middle
+    reordering), with rerank_score as gain, against the ideal descending-score order.
     """
-    score_strs = re.findall(r'rerank_score=["\']([0-9.]+)["\']', xml_context_block)
-    scores = [float(s) for s in score_strs]
+    ranked = sorted((int(r), float(s)) for r, s in DOCUMENT_TAG.findall(xml_context_block))
+    scores = [s for _, s in ranked]
     if not scores:
         return 0.0
     if len(scores) <= 1 or all(s == 0.0 for s in scores):

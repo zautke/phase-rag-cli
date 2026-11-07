@@ -118,16 +118,16 @@ def test_ndcg_and_answer_relevance_unit() -> None:
     """Unit test new computed nDCG and answer relevance metrics in p10."""
     xml_ideal = (
         '<retrieved_context>\n'
-        '  <document id="d1" chunk_id="c1" rerank_score="0.9">\n    ctx\n  </document>\n'
-        '  <document id="d2" chunk_id="c2" rerank_score="0.5">\n    ctx\n  </document>\n'
+        '  <document id="d1" chunk_id="c1" rank="1" rerank_score="0.9">\n    ctx\n  </document>\n'
+        '  <document id="d2" chunk_id="c2" rank="2" rerank_score="0.5">\n    ctx\n  </document>\n'
         '</retrieved_context>'
     )
     assert p10_evaluate.compute_ndcg_at_k(xml_ideal) == 1.0
 
     xml_inverted = (
         '<retrieved_context>\n'
-        '  <document id="d1" chunk_id="c1" rerank_score="0.2">\n    ctx\n  </document>\n'
-        '  <document id="d2" chunk_id="c2" rerank_score="0.8">\n    ctx\n  </document>\n'
+        '  <document id="d1" chunk_id="c1" rank="1" rerank_score="0.2">\n    ctx\n  </document>\n'
+        '  <document id="d2" chunk_id="c2" rank="2" rerank_score="0.8">\n    ctx\n  </document>\n'
         '</retrieved_context>'
     )
     ndcg_inv = p10_evaluate.compute_ndcg_at_k(xml_inverted)
