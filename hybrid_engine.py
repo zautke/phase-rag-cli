@@ -83,7 +83,7 @@ def _dense_sentence_transformers(model_name: str) -> tuple[Callable[[list[str], 
     def embed(texts: list[str], query: bool) -> list[list[float]]:
         return st.encode(texts, show_progress_bar=False, normalize_embeddings=True).tolist()
 
-    return embed, int(st.get_sentence_embedding_dimension())
+    return embed, int(st.get_embedding_dimension())
 
 
 def _dense_fastembed(model_name: str) -> tuple[Callable[[list[str], bool], list[list[float]]], int]:

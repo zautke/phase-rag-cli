@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import types
+import warnings
 from pathlib import Path
 from typing import ClassVar
 
@@ -111,7 +112,11 @@ def test_dense_sentence_transformers_path_unchanged(monkeypatch: pytest.MonkeyPa
         def __init__(self, name: str, trust_remote_code: bool = False) -> None:
             assert trust_remote_code is True
 
-        def get_sentence_embedding_dimension(self) -> int:
+        def get_embedding_dimension(self) -> int:
+            return 4
+
+        def get_sentence_embedding_dimension(self) -> int:  # sentence-transformers 6.x: FutureWarning (D-B1)
+            warnings.warn('renamed to get_embedding_dimension', FutureWarning, stacklevel=2)
             return 4
 
         def encode(self, texts, show_progress_bar, normalize_embeddings):
@@ -121,9 +126,11 @@ def test_dense_sentence_transformers_path_unchanged(monkeypatch: pytest.MonkeyPa
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=FakeST))
     monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(PreTrainedModel=type("P", (), {})))
     monkeypatch.setattr(he, "prefetch_st", _noop)
-    out = he.embed_dense_batch(["x", "y"], "sentence_transformers", "test/st-dense", query=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        out = he.embed_dense_batch(["x", "y"], "sentence_transformers", "test/st-dense", query=True)
+        assert he.get_dense_embedder("sentence_transformers", "test/st-dense")[1] == 4
     assert out == [[1.0] * 4, [1.0] * 4]
-    assert he.get_dense_embedder("sentence_transformers", "test/st-dense")[1] == 4
 
 
 # --- sparse plugin ---------------------------------------------------------------------------
