@@ -53,7 +53,7 @@ def test_d13_every_env_example_key_is_read_by_code() -> None:
 def test_d13_no_second_literal_threshold_default() -> None:
     for mod in (p00, p09_generate):
         text = Path(mod.__file__).read_text(encoding="utf-8")
-        assert not re.search(r"\]\s*=\s*0\.\d+", text), mod.__name__
+        assert not re.findall(r"\b0\.6[05]\b", text), mod.__name__  # only DEFAULT_CRAG_THRESHOLD holds it
 
 
 def p08_file(tmp_path: Path, score: float) -> Path:

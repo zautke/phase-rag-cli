@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # p08_rerank.py
+import textwrap
 from pathlib import Path
 from typing import Annotated
 
@@ -61,7 +62,8 @@ def apply_lost_in_the_middle_ordering(
 
 def assemble_xml_context(selected: list[RerankedContextItem], reorder_litm: bool) -> str:
     """<retrieved_context> block; `selected` is in cross-encoder order and each <document> carries
-    its 1-based cross-encoder rank, so the block's physical order may differ without losing it."""
+    its 1-based cross-encoder rank, so the block's physical order may differ without losing it.
+    Every body line is indented >= 4 spaces so only real opening tags sit at the 2-space indent."""
     rank = {id(item): n for n, item in enumerate(selected, start=1)}
     ordered = apply_lost_in_the_middle_ordering(selected) if reorder_litm else selected
     parts = ["<retrieved_context>"]
@@ -69,7 +71,7 @@ def assemble_xml_context(selected: list[RerankedContextItem], reorder_litm: bool
         parts.append(
             f'  <document id="{item.doc_id}" chunk_id="{item.chunk_id}" rank="{rank[id(item)]}" '
             f'rerank_score="{item.cross_encoder_score:.4f}">\n'
-            f"    {item.expanded_parent_context}\n"
+            f"{textwrap.indent(item.expanded_parent_context, '    ')}\n"
             f"  </document>"
         )
     parts.append("</retrieved_context>")

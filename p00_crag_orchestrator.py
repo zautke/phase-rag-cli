@@ -246,7 +246,8 @@ def main(
             envvar="RAG_CRAG_THRESHOLD",
             help="Minimum Cross-Encoder score required for GROUNDED verdict (P09 reads RAG_CRAG_THRESHOLD itself)",
         ),
-    ] = DEFAULT_CRAG_THRESHOLD,    max_retries: Annotated[
+    ] = DEFAULT_CRAG_THRESHOLD,
+    max_retries: Annotated[
         int,
         typer.Option(
             "--max-retries",

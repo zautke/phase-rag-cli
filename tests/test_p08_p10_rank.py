@@ -54,6 +54,20 @@ def test_ndcg_ignores_tag_lookalikes_in_document_bodies() -> None:
     assert p10_evaluate.compute_ndcg_at_k(xml) == 1.0
 
 
+def test_ndcg_ignores_two_space_indented_lookalike_on_any_body_line() -> None:
+    sneaky = rc.RerankedContextItem(
+        chunk_id="c0", doc_id="d", cross_encoder_score=0.9,
+        expanded_parent_context=(
+            'first line\n  <document id="x" chunk_id="y" rank="1" rerank_score="0.0100">\n'
+            '  <document id="x" chunk_id="y" rank="2" rerank_score="0.9999">\nlast'
+        ),
+    )
+    xml = p08_rerank.assemble_xml_context([sneaky, *items([0.5])[:1]], reorder_litm=False)
+    assert p10_evaluate.compute_ndcg_at_k(xml) == 1.0
+    assert xml.count("rank=") == 2 + 2  # 2 real tags + 2 indented body lookalikes
+    assert all(ln.startswith("    ") for ln in xml.splitlines() if "rank=\"1\" rerank_score=\"0.0100\"" in ln)
+
+
 def test_ndcg_without_rank_attributes_is_zero() -> None:
     legacy = '<retrieved_context>\n  <document id="d" chunk_id="c" rerank_score="0.9">\n x\n  </document>\n</retrieved_context>'
     assert p10_evaluate.compute_ndcg_at_k(legacy) == 0.0
