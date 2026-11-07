@@ -15,7 +15,7 @@ def test_p01_stdout_and_artifact_are_byte_identical_lf(tmp_path: Path) -> None:
     (src / "a.md").write_text("# Title\n\nbody text\n", encoding="utf-8")
     out = tmp_path / "01.json"
     proc = subprocess.run(
-        [sys.executable, "-m", "p01_load", "-s", str(src), "-o", str(out), "-q"],
+        [sys.executable, str(Path(__file__).resolve().parent.parent / "p01_load.py"), "-s", str(src), "-o", str(out), "-q"],
         capture_output=True,
         check=True,
     )

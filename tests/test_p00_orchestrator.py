@@ -152,6 +152,8 @@ def test_d12_default_is_two_retries(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     h = Harness(monkeypatch, tmp_path)
     assert h.run().exit_code == 0
     assert h.count("p06_query.py") == 3
+    raw = (h.out.parent / "09_generated.json").read_bytes()  # written via payload_bytes: LF only, one trailing newline
+    assert b"\r" not in raw and raw.endswith(b"}\n") and not raw.endswith(b"\n\n")
 
 
 def test_d12_negative_retries_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

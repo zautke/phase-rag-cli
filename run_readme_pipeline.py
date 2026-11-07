@@ -98,12 +98,13 @@ console.print(Panel(
 
 for idx, (title, cmd) in enumerate(phases, start=1):
     console.print(f"\n[bold magenta]>>> EXECUTING PHASE {idx:02d}: {title}[/bold magenta]")
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8-sig")
-    stdout, stderr = proc.communicate()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # bytes: copies stay byte-identical
+    stdout, stderr_raw = proc.communicate()
+    stderr = stderr_raw.decode("utf-8", errors="replace")
     
     # Write captured raw JSON stdout to artifact
     stdout_file = art_dir / f"stdout_{idx:02d}.json"
-    stdout_file.write_text(stdout, encoding="utf-8")
+    stdout_file.write_bytes(stdout)
     
     # Display stderr Rich console output directly
     if stderr:
