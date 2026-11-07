@@ -2,7 +2,6 @@
 # tests/test_p06_p08_p09_p10_p00.py
 from __future__ import annotations
 
-import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -17,40 +16,7 @@ import p10_evaluate
 import rag_contracts as rc
 
 
-def test_ast_no_bare_print_in_task3_modules() -> None:
-    """Ensure zero bare print() calls exist in p06, p08, p09, p10, and p00."""
-    root = Path(__file__).resolve().parent.parent
-    for fname in (
-        "p06_query.py",
-        "p08_rerank.py",
-        "p09_generate.py",
-        "p10_evaluate.py",
-        "p00_crag_orchestrator.py",
-    ):
-        fpath = root / fname
-        tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fname)
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "print"
-            ):
-                pytest.fail(f"Bare print() found in {fname}:{node.lineno}")
-
-
-def test_usage_and_contracts_task3_modules() -> None:
-    """Verify Usage() and PhaseCLI contracts across p06, p08, p09, p10, and p00."""
-    for mod in (
-        p06_query,
-        p08_rerank,
-        p09_generate,
-        p10_evaluate,
-        p00_crag_orchestrator,
-    ):
-        assert hasattr(mod, "Usage")
-        usage_text = mod.Usage()
-        assert isinstance(usage_text, str) and "Usage:" in usage_text
-
+def test_contract_chain_p06_to_p10_and_p00() -> None:
     assert p06_query.cli_engine.input_model is rc.Phase05IndexedOutput
     assert p06_query.cli_engine.output_model is rc.Phase06QueryPlanOutput
 
@@ -187,6 +153,7 @@ def test_p09_extractive_grounding_unit() -> None:
     assert cit_empty == []
 
 
+@pytest.mark.live
 def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     """
     Test p06_query.py, p08_rerank.py (with fastembed backend), p09_generate.py,

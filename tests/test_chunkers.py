@@ -106,4 +106,5 @@ def test_p04_cli_bad_overlap_exit2_clean_stdout(tmp_path, overlap):
     )
     assert proc.returncode == 2
     assert proc.stdout == b""
+    assert b"overlap" in proc.stderr
     assert not (tmp_path / "o.json").exists()

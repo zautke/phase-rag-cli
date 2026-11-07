@@ -135,6 +135,7 @@ def test_unreachable_hub_serves_verified_snapshot_without_calling_it(tmp_path, m
 
 def test_unreachable_hub_refuses_unmarked_snapshot(tmp_path, monkeypatch):
     _offline_hub(monkeypatch)
+    monkeypatch.setattr(model_fetch.constants, "HF_HUB_OFFLINE", False)
     _cached(tmp_path, complete=False)  # ref + dir but no proof of a verified fetch
     with pytest.raises(OSError):
         model_fetch.ensure_model("org/m", tmp_path)

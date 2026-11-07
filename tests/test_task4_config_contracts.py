@@ -50,6 +50,16 @@ def test_d13_every_env_example_key_is_read_by_code() -> None:
         assert f'envvar="{key}"' in sources, f"{key} is in .env.example but nothing reads it"
 
 
+def test_every_rag_env_key_matches_its_default_constant() -> None:
+    rag_keys = {k: v for k, v in env_example().items() if k.startswith("RAG_")}
+    assert rag_keys
+    for key, value in rag_keys.items():
+        name = "DEFAULT_" + key.removeprefix("RAG_")
+        holders = [m for m in (rc, he) if hasattr(m, name)]
+        assert len(holders) == 1, f"{key}: expected exactly one {name} constant, found {len(holders)}"
+        assert str(getattr(holders[0], name)) == value, f"{key}={value} != {name}"
+
+
 def test_d13_no_second_literal_threshold_default() -> None:
     for mod in (p00, p09_generate):
         text = Path(mod.__file__).read_text(encoding="utf-8")

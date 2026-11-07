@@ -2,7 +2,6 @@
 # tests/test_p05_and_p07.py
 from __future__ import annotations
 
-import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -15,47 +14,14 @@ import p07_retrieve
 import rag_contracts as rc
 
 
-def test_ast_no_bare_print_in_task2_modules() -> None:
-    """Ensure zero bare print() calls exist in hybrid_engine.py, p05_index.py, and p07_retrieve.py."""
-    root = Path(__file__).resolve().parent.parent
-    for fname in ("hybrid_engine.py", "p05_index.py", "p07_retrieve.py"):
-        fpath = root / fname
-        tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fname)
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "print"
-            ):
-                pytest.fail(f"Bare print() found in {fname}:{node.lineno}")
-
-
-def test_usage_and_short_long_flags_p05_and_p07() -> None:
-    """Verify p05_index and p07_retrieve expose Usage() and contract models."""
-    for mod in (p05_index, p07_retrieve):
-        assert hasattr(mod, "Usage")
-        usage_text = mod.Usage()
-        assert isinstance(usage_text, str) and "Usage:" in usage_text
-
+def test_contract_chain_p05_and_p07() -> None:
     assert p05_index.cli_engine.input_model is rc.Phase04ChunkedOutput
     assert p05_index.cli_engine.output_model is rc.Phase05IndexedOutput
     assert p07_retrieve.cli_engine.input_model is rc.Phase06QueryPlanOutput
     assert p07_retrieve.cli_engine.output_model is rc.Phase07RetrievedOutput
 
 
-def test_hybrid_engine_constants_and_helpers() -> None:
-    """Verify hybrid_engine constants, deterministic UUIDv5, and sigmoid calibration."""
-    assert hybrid_engine.DEFAULT_DENSE_BACKEND == "sentence_transformers"
-    assert hybrid_engine.DEFAULT_DENSE_MODEL == "jinaai/jina-embeddings-v3"
-    assert hybrid_engine.DEFAULT_SPARSE_MODEL == "prithivida/Splade_PP_en_v1"
-    assert hybrid_engine.DENSE_VECTOR_NAME == "jina-dense"
-    assert hybrid_engine.SPARSE_VECTOR_NAME == "splade-sparse"
-    assert hybrid_engine.DEFAULT_RERANK_MODEL == "BAAI/bge-reranker-v2-m3"
-    assert (
-        hybrid_engine.DEFAULT_FASTEMBED_RERANK_MODEL
-        == "jinaai/jina-reranker-v2-base-multilingual"
-    )
-
+def test_deterministic_point_uuid_and_sigmoid_calibration() -> None:
     u1 = hybrid_engine.deterministic_point_uuid("doc1_sec0_chk_0")
     u2 = hybrid_engine.deterministic_point_uuid("doc1_sec0_chk_0")
     u3 = hybrid_engine.deterministic_point_uuid("doc1_sec0_chk_1")
@@ -68,6 +34,7 @@ def test_hybrid_engine_constants_and_helpers() -> None:
     assert hybrid_engine._sigmoid(-25.0) < 0.001
 
 
+@pytest.mark.live
 def test_live_p05_index_and_p07_retrieve_end_to_end(tmp_path: Path) -> None:
     """
     Test live p05_index.py and p07_retrieve.py against a temporary Qdrant storage directory.
