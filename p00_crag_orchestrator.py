@@ -23,6 +23,7 @@ from rag_contracts import (
     PhaseCLI,
     PhaseCRAGLoopOutput,
     err_console,
+    payload_bytes,
 )
 
 app = typer.Typer(add_completion=False)
@@ -423,9 +424,7 @@ def main(
     # Copy winning attempt's Phase 09 artifact to canonical path under out_file's parent directory
     canonical_p09 = artifacts_dir / "09_generated.json"
     canonical_p09.parent.mkdir(parents=True, exist_ok=True)
-    canonical_p09.write_text(
-        p09_out.model_dump_json(indent=2), encoding="utf-8"
-    )
+    canonical_p09.write_bytes(payload_bytes(p09_out))
 
     # --- Phase 10: Final RAG Triad Evaluation ---
     p10_raw = invoke_cli_phase(

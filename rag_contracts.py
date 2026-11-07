@@ -209,6 +209,11 @@ class PhaseCRAGLoopOutput(BasePhasePayload):
     final_evaluation: Phase10EvalOutput
 
 
+def payload_bytes(model: BaseModel) -> bytes:
+    """Canonical wire form: UTF-8, no BOM, LF only, exactly one trailing newline."""
+    return (model.model_dump_json(indent=2) + "\n").encode("utf-8")
+
+
 # --- GENERIC TYPE-AWARE TRI-PLEX CLI ENGINE ---
 T_In = TypeVar("T_In", bound=BasePhasePayload)
 T_Out = TypeVar("T_Out", bound=BasePhasePayload)
@@ -263,10 +268,11 @@ class PhaseCLI(Generic[T_In, T_Out]):
         # Re-validate output contract before emitting
         validated = self.output_model.model_validate(payload.model_dump())
         json_str = validated.model_dump_json(indent=2)
+        data = payload_bytes(validated)
 
-        # 1. Persist to file
+        # 1. Persist to file (binary: no newline translation on Windows)
         out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(json_str, encoding="utf-8")
+        out_file.write_bytes(data)
 
         # 2. Dump human-readable telemetry to console (stderr so pipes stay clean)
         if not quiet:
@@ -285,5 +291,5 @@ class PhaseCLI(Generic[T_In, T_Out]):
             )
 
         # 3. Stream pure JSON to stdout for the next CLI phase
-        sys.stdout.write(json_str + "\n")
+        sys.stdout.buffer.write(data)
         sys.stdout.flush()

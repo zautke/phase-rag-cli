@@ -15,7 +15,7 @@
 
 ## Plugin implementation blueprint (normative)
 
-**A. External stage (preferred; language-agnostic).** Read Phase[N-1] JSON from stdin or `--in-file`; validate against the published model (`strict=True, extra="forbid"`; a Python plugin imports `rag_contracts`); compute; log only to stderr; write Phase[N] JSON to `--out-file` and the identical bytes to stdout; exit 0, non-zero on any failure. Install: `rag-pN-1 | my-stage | rag-pN+1`. No registration, no framework, no async.
+**A. External stage (preferred; language-agnostic).** Read Phase[N-1] JSON from stdin or `--in-file`; validate against the published model (`strict=True, extra="forbid"`; a Python plugin imports `rag_contracts`); compute; log only to stderr; write Phase[N] JSON to `--out-file` and the identical bytes (UTF-8, LF, one trailing newline) to stdout; exit 0, non-zero on any failure. Install: `rag-pN-1 | my-stage | rag-pN+1`. No registration, no framework, no async.
 
 **B. In-phase strategy.** One plain function with the published signature (`Chunker = Callable[[ParsedSection, int, int], list[DocumentChunk]]`), added to `CHUNKERS` and selected by `--strategy/-s`. The name is resolved before `load_upstream`, so an unknown name exits 2 with `Known: ...` on stderr and an empty stdout. The output payload records the chosen name (`chunk_strategy`). Third-party discovery (`importlib.metadata.entry_points(group="rag.chunkers")`, each entry point an import-cheap `register()` function as in LightRAG `lightrag.chunkers` and pluggy `load_setuptools_entrypoints`) is deferred until a third-party strategy exists.
 
