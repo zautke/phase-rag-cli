@@ -96,7 +96,7 @@ def test_discover_classifies_link_junction_placeholder_and_special(tmp_path: Pat
         if name == "sym.md":
             base["st_mode"] = stat.S_IFLNK | 0o777
         elif name == "junc.md":
-            base["st_reparse_tag"] = stat.IO_REPARSE_TAG_MOUNT_POINT
+            base["st_reparse_tag"] = fs.IO_REPARSE_TAG_MOUNT_POINT
         elif name == "cloud.md":
             base["st_file_attributes"] = 0x400000
         elif name == "fifo":

@@ -54,6 +54,7 @@ POLICY_ERRORS = {"strict": "strict", "replace": "rag-count-replace", "escape": "
 HIDDEN_NAMES = {"desktop.ini", "thumbs.db"}
 FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM = 0x2, 0x4
 CLOUD_RECALL = 0x400000 | 0x40000  # RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN: reading would download
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003  # junction; stat only defines it on Windows
 
 _replacements = [0]
 
@@ -105,7 +106,7 @@ def long_path(p: str) -> str:
 
 
 def is_link(st: os.stat_result) -> bool:
-    return stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) == stat.IO_REPARSE_TAG_MOUNT_POINT
+    return stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) == IO_REPARSE_TAG_MOUNT_POINT
 
 
 def is_hidden(name: str, st: os.stat_result) -> bool:
