@@ -252,32 +252,7 @@ def test_p01_to_p04_stdin_stdout_pipe_and_bom_tolerance(tmp_path: Path) -> None:
     )
     assert final_obj.model_dump() == disk_obj.model_dump()
     assert len(final_obj.chunks) == 2
-    assert final_obj.chunks[0].doc_id == "alpha"
+    assert final_obj.chunks[0].doc_id == "alpha.md"  # doc_id = path relative to --source-dir
     assert final_obj.chunks[1].header_hierarchy == ["Section One", "Sub Section"]
-
-
-def test_p01_html_mime_and_stem_collision_disambiguation(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parent.parent
-    src_dir = tmp_path / "collision_corpus"
-    src_dir.mkdir()
-
-    # Create two files sharing identical stem but different extensions
-    (src_dir / "guide.md").write_text("# Guide MD\nMarkdown text.", encoding="utf-8")
-    (src_dir / "guide.html").write_text("<h1>Guide HTML</h1><p>HTML body.</p>", encoding="utf-8")
-
-    proc = subprocess.run(
-        [sys.executable, str(root / "p01_load.py"), "--source-dir", str(src_dir), "--out-file", str(tmp_path / "p1.json"), "--quiet"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=True,
-    )
-    loaded = rc.Phase01LoadedOutput.model_validate_json(proc.stdout)
-    assert len(loaded.documents) == 2
-
-    docs_by_id = {d.doc_id: d for d in loaded.documents}
-    assert "guide_md" in docs_by_id
-    assert "guide_html" in docs_by_id
-    assert docs_by_id["guide_md"].mime_type == "text/markdown"
-    assert docs_by_id["guide_html"].mime_type == "text/html"
+    # same-stem / different-extension ids: tests/test_p01_load.py::test_n22_*
 

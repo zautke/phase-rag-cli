@@ -107,15 +107,45 @@ class BasePhasePayload(BaseModel):
 # --- INGESTION SCHEMAS (Phases 1 - 5) ---
 class RawDocument(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
-    doc_id: str
+    doc_id: str  # POSIX path relative to the source root (single file: its name)
     source_uri: str
     mime_type: str
-    raw_content: str
+    raw_content: str  # byte-faithful decode: line endings kept, BOM stripped (see `bom`)
+    sha256: str  # over the raw bytes, BOM included
+    size_bytes: int
+    encoding: str
+    bom: str | None
+    newline_style: Literal["lf", "crlf", "cr", "mixed", "none"]
+    loader: str
+    mime_source: Literal["signature", "extension", "content", "default"]
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class LoadError(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    path: str
+    stage: Literal["discover", "open", "read", "decode", "limit", "unstable"]
+    exc_type: str
+    message: str
+    bytes_read: int
+    errno: int | None = None
+    offset: int | None = None
+
+
+class LoadSkip(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    path: str
+    reason: str
+    size_bytes: int
+    detail: str | None = None
 
 
 class Phase01LoadedOutput(BasePhasePayload):
     phase_name: str = "01_loading"
     documents: list[RawDocument]
+    errors: list[LoadError] = Field(default_factory=list)
+    skipped: list[LoadSkip] = Field(default_factory=list)
+    corpus_origin: Literal["directory", "file", "builtin_demo"]
 
 
 class MarkdownDocument(BaseModel):
