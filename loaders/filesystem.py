@@ -33,7 +33,7 @@ STABILITY_RETRIES = 1
 LOCK_RETRIES = 3
 LOCK_BACKOFF_MS = 500
 RETRY_LOCKS = os.name == "nt"  # a sharing violation is transient on Windows; EACCES on POSIX is not
-DEDUP = "skip"
+LOCK_WINERRORS = (32, 33)  # ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION; an ACL denial (5) is permanent
 
 SIGNATURES = (
     (b"%PDF-", "application/pdf"), (b"PK\x03\x04", "application/zip"), (b"\x89PNG", "image/png"),
@@ -77,7 +77,8 @@ class FilesystemOptions:
     types: tuple[str, ...] = tuple(DEFAULT_LOAD_TYPES.split(","))
     encoding_policy: str = DEFAULT_LOAD_ENCODING_POLICY
     encoding: str = DEFAULT_LOAD_ENCODING  # "" = BOM, else utf-8
-    exclude_dir: str | None = None  # the --out-file directory when it sits inside the root
+    max_files: int = DEFAULT_LOAD_MAX_FILES  # directory entries read; more -> raised LoadFailure("limit")
+    exclude_paths: tuple[str, ...] = ()  # the --out-file directory, or the artifact + report in the root
 
 
 def display_path(s: str) -> tuple[str, bool]:
@@ -130,76 +131,86 @@ class FilesystemLoader:
 
     # --- pass 1 ------------------------------------------------------------------------------------
     def discover(self, root: str) -> Iterator[SourceRef | Skip | LoadFailure]:
+        """Pre-order walk on an explicit os.scandir stack, links never followed. Every unreadable
+        directory (the root included) is yielded as a LoadFailure the moment it fails. Raises
+        LoadFailure("limit") on reading entry max_files + 1, so no directory is listed in full first."""
         top = long_path(root)
         if os.path.isfile(top):  # a single named file bypasses every filter
             st = os.stat(top)
             yield SourceRef(top, display_path(os.path.basename(root))[0], st.st_size, st.st_mtime_ns)
             return
-        excl = os.path.normcase(long_path(self.opts.exclude_dir)) if self.opts.exclude_dir else None
-        walk_errors: list[OSError] = []
-        for dirpath, dirs, files in os.walk(top, followlinks=False, onerror=walk_errors.append):
-            for err in walk_errors:
-                yield LoadFailure("discover", str(err.strerror or err), path=self._rel(top, err.filename or dirpath),
-                                  errno=err.errno, exc_type=type(err).__name__)
-            walk_errors.clear()
-            keep = []
-            for d in sorted(dirs):
-                full = os.path.join(dirpath, d)
+        excluded = {os.path.normcase(long_path(p)) for p in self.opts.exclude_paths}
+        seen, stack = 0, [top]
+        while stack:
+            d = stack.pop()
+            names = []
+            try:
+                with os.scandir(d) as it:
+                    for entry in it:
+                        seen += 1
+                        if seen > self.opts.max_files:
+                            raise LoadFailure("limit", f"more than max_files={self.opts.max_files} entries under "
+                                              f"{root}; narrow the source or raise --max-files", path=".")
+                        names.append(entry.name)
+            except OSError as e:
+                yield self._failure("discover", self._rel(top, d), e)
+                continue
+            subdirs = []
+            for name in sorted(names):
+                full = os.path.join(d, name)
                 rel = self._rel(top, full)
                 try:
                     st = os.lstat(full)
                 except OSError as e:
-                    yield LoadFailure("discover", str(e.strerror or e), path=rel, errno=e.errno, exc_type=type(e).__name__)
+                    yield self._failure("discover", rel, e)
                     continue
-                if is_link(st):
-                    yield Skip(rel, "link")
-                elif is_hidden(d, st) and not self.opts.include_hidden:
-                    yield Skip(rel, "hidden")  # one record per pruned directory
-                elif excl is not None and os.path.normcase(full) == excl:
+                if os.path.normcase(full) in excluded:
                     yield Skip(rel, "out_dir")
-                else:
-                    keep.append(d)
-            dirs[:] = keep if self.opts.recursive else []
-            for f in sorted(files):
-                full = os.path.join(dirpath, f)
-                rel = self._rel(top, full)
-                try:
-                    st = os.lstat(full)
-                except OSError as e:
-                    yield LoadFailure("discover", str(e.strerror or e), path=rel, errno=e.errno, exc_type=type(e).__name__)
-                    continue
-                if is_link(st):
+                elif is_link(st):
                     yield Skip(rel, "link")
+                elif stat.S_ISDIR(st.st_mode):
+                    if is_hidden(name, st) and not self.opts.include_hidden:
+                        yield Skip(rel, "hidden")  # one record per pruned directory
+                    elif self.opts.recursive:
+                        subdirs.append(full)
                 elif not stat.S_ISREG(st.st_mode):
                     yield Skip(rel, "not_regular_file")
                 elif getattr(st, "st_file_attributes", 0) & CLOUD_RECALL:
                     yield Skip(rel, "cloud_placeholder", st.st_size)
-                elif is_hidden(f, st) and not self.opts.include_hidden:
+                elif is_hidden(name, st) and not self.opts.include_hidden:
                     yield Skip(rel, "hidden", st.st_size)
                 elif (self.opts.include and not any(fnmatchcase(rel, g) for g in self.opts.include)) or any(
                         fnmatchcase(rel, g) for g in self.opts.exclude):
                     yield Skip(rel, "excluded", st.st_size)
                 else:
                     yield SourceRef(full, rel, st.st_size, st.st_mtime_ns)
+            stack.extend(reversed(subdirs))  # pop() then visits them in sorted order
 
     @staticmethod
     def _rel(top: str, full: str) -> str:
         return display_path(PurePath(os.path.relpath(full, top)).as_posix())[0]
 
+    @staticmethod
+    def _failure(stage: str, rel: str, e: OSError) -> LoadFailure:
+        return LoadFailure(stage, str(e.strerror or e), path=rel, errno=e.errno, exc_type=type(e).__name__)
+
     # --- pass 2 ------------------------------------------------------------------------------------
     def sniff(self, ref: SourceRef) -> Sniff:
         if ref.size_bytes == 0:
-            return Sniff("application/octet-stream", "default", "utf-8", 0, False, "empty")
+            return Sniff("application/octet-stream", "default", "utf-8", 0, "empty")
         with self._open(ref) as f:
-            head = f.read(SNIFF_BYTES)
+            try:
+                head = f.read(SNIFF_BYTES)
+            except OSError as e:  # a byte-range lock or EIO fails the read, not the open
+                raise self._failure("read", ref.rel_path, e) from None
         for sig, mime in SIGNATURES:
             if head.startswith(sig):
-                return Sniff(mime, "signature", "", 0, False, f"binary:{mime}")
+                return Sniff(mime, "signature", "", 0, f"binary:{mime}")
         if head.startswith(b"MZ") and b"\0" in head:  # a PE header always carries NULs
-            return Sniff("application/x-msdownload", "signature", "", 0, False, "binary:application/x-msdownload")
+            return Sniff("application/x-msdownload", "signature", "", 0, "binary:application/x-msdownload")
         enc, bom_len = next(((e, len(b)) for b, e in BOMS if head.startswith(b)), (self.opts.encoding or "utf-8", 0))
         if b"\0" in head and not enc.startswith(("utf-16", "utf-32")):
-            return Sniff("application/octet-stream", "content", enc, bom_len, False, "binary:nul_bytes")
+            return Sniff("application/octet-stream", "content", enc, bom_len, "binary:nul_bytes")
         ext = os.path.splitext(ref.rel_path)[1].lower()
         if ext in EXT_MIME:
             mime, source = EXT_MIME[ext], "extension"
@@ -212,11 +223,11 @@ class FilesystemLoader:
             else:
                 mime, source = "text/plain", "default"
         if mime not in self.opts.types:
-            return Sniff(mime, source, enc, bom_len, False, f"type_not_allowed:{mime}")
+            return Sniff(mime, source, enc, bom_len, f"type_not_allowed:{mime}")
         if ref.size_bytes > self.opts.max_file_bytes:
             raise LoadFailure("limit", f"{ref.size_bytes} bytes > max_file_bytes {self.opts.max_file_bytes}",
                               path=ref.rel_path, bytes_read=len(head))
-        return Sniff(mime, source, enc, bom_len, True)
+        return Sniff(mime, source, enc, bom_len)
 
     # --- pass 3 ------------------------------------------------------------------------------------
     def load(self, ref: SourceRef, sniff: Sniff) -> LoadedDoc | Skip:
@@ -262,15 +273,16 @@ class FilesystemLoader:
                          len(data), sniff.encoding, bom, style, self.name, sniff.mime_source, dict(meta))
 
     def _open(self, ref: SourceRef):
-        for attempt in range(LOCK_RETRIES + 1):
+        for _ in range(LOCK_RETRIES if RETRY_LOCKS else 0):  # transient Windows locks only
             try:
                 return open(ref.uri, "rb")
             except PermissionError as e:
-                if not RETRY_LOCKS or attempt == LOCK_RETRIES:
-                    raise LoadFailure("open", str(e.strerror or e), path=ref.rel_path, errno=e.errno,
-                                      exc_type=type(e).__name__) from None
-                time.sleep(LOCK_BACKOFF_MS / 1000)
+                if getattr(e, "winerror", None) not in LOCK_WINERRORS:
+                    raise self._failure("open", ref.rel_path, e) from None
             except OSError as e:
-                raise LoadFailure("open", str(e.strerror or e), path=ref.rel_path, errno=e.errno,
-                                  exc_type=type(e).__name__) from None
-        raise AssertionError("unreachable")
+                raise self._failure("open", ref.rel_path, e) from None
+            time.sleep(LOCK_BACKOFF_MS / 1000)
+        try:
+            return open(ref.uri, "rb")
+        except OSError as e:
+            raise self._failure("open", ref.rel_path, e) from None

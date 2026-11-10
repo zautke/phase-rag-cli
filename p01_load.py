@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import codecs
 import contextlib
-import errno
 import hashlib
 import json
 import os
@@ -47,11 +46,13 @@ from rag_contracts import (
     Phase01LoadedOutput,
     PhaseCLI,
     RawDocument,
+    StdoutClosed,
     atomic_write_bytes,
 )
 from rag_logging import DEFAULT_LOG_LEVEL, LOG_LEVELS, get_logger, peak_rss_bytes
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False)
+app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False,
+                  context_settings={"help_option_names": ["-h", "--help"]})
 cli_engine = PhaseCLI(
     "Phase 01: Document Loading",
     None,
@@ -126,10 +127,9 @@ def tool_version() -> str:
 class Run:
     """One p01 run: three passes, records, report. Exit code from `execute()`."""
 
-    def __init__(self, loader, source: Path | None, out_file: Path, max_files: int, max_total: int,
-                 strict: bool, quiet: bool, args: dict[str, Any], log) -> None:
-        self.loader, self.source, self.out_file, self.max_files, self.max_total = loader, source, out_file, \
-            max_files, max_total
+    def __init__(self, loader, source: Path | None, out_file: Path, max_total: int, strict: bool, quiet: bool,
+                 args: dict[str, Any], log) -> None:
+        self.loader, self.source, self.out_file, self.max_total = loader, source, out_file, max_total
         self.strict, self.quiet, self.args, self.log = strict, quiet, args, log
         self.run_id = Phase01LoadedOutput.model_fields["run_id"].default_factory()
         self.started, self.t0 = datetime.now(UTC).isoformat(), time.monotonic()
@@ -159,6 +159,18 @@ class Run:
         if self.strict:
             raise Fatal(f"--strict: {path} failed at stage {e.stage}")
 
+    def attempt(self, fn, ref: SourceRef, *args: Any, **row: Any) -> Any:
+        """One per-file guard for sniff and load: any per-file failure becomes an errors[] record."""
+        try:
+            return fn(ref, *args)
+        except LoadFailure as e:
+            self.fail(e, ref.rel_path, size_bytes=ref.size_bytes, mtime_ns=ref.mtime_ns, **row)
+        except (OSError, UnicodeError, MemoryError) as e:
+            stage = "decode" if isinstance(e, UnicodeError) else "read"
+            self.fail(LoadFailure(stage, str(e), errno=getattr(e, "errno", None), exc_type=type(e).__name__),
+                      ref.rel_path, size_bytes=ref.size_bytes, mtime_ns=ref.mtime_ns, **row)
+        return None
+
     # --- passes ------------------------------------------------------------------------------------
     def collect(self) -> str:
         if self.source is None:
@@ -167,28 +179,25 @@ class Run:
             return "builtin_demo"
         self.log.info(f"load start root={self.source} backend={self.loader.name}")
         refs: list[SourceRef] = []
-        for item in self.loader.discover(str(self.source)):  # pass 1: discover, bounded during the walk
-            self.discovered += 1
-            if self.discovered > self.max_files:
-                raise Fatal(f"more than max_files={self.max_files} entries under {self.source}; "
-                            "narrow --source-dir/--include or raise --max-files")
-            if isinstance(item, SourceRef):
-                refs.append(item)
-            elif isinstance(item, Skip):
-                self.skip(item)
-            else:
-                self.fail(item, item.path)
+        try:  # pass 1: discover; the backend raises LoadFailure("limit") past --max-files entries
+            for item in self.loader.discover(str(self.source)):
+                self.discovered += 1
+                if isinstance(item, SourceRef):
+                    refs.append(item)
+                elif isinstance(item, Skip):
+                    self.skip(item)
+                else:
+                    self.fail(item, item.path)
+        except LoadFailure as e:
+            raise Fatal(e.message) from None
         refs.sort(key=lambda r: r.rel_path)  # code-point order, stable across OSes
         todo = []
         for ref in refs:  # pass 2: sniff (<= 8 KiB each), then the total cap over supported files
-            try:
-                sn = self.loader.sniff(ref)
-            except LoadFailure as e:
-                self.fail(e, ref.rel_path, size_bytes=ref.size_bytes, mtime_ns=ref.mtime_ns)
+            sn = self.attempt(self.loader.sniff, ref)
+            if sn is None:
                 continue
-            if not sn.supported:
-                self.skip(Skip(ref.rel_path, sn.reason or "unsupported", ref.size_bytes), mime=sn.mime_type,
-                          mtime_ns=ref.mtime_ns)
+            if sn.reason:
+                self.skip(Skip(ref.rel_path, sn.reason, ref.size_bytes), mime=sn.mime_type, mtime_ns=ref.mtime_ns)
                 continue
             todo.append((ref, sn))
         total = sum(ref.size_bytes for ref, _ in todo)
@@ -198,20 +207,13 @@ class Run:
         folded: dict[str, str] = {}
         for k, (ref, sn) in enumerate(todo, start=1):  # pass 3: load
             t = time.monotonic()
-            try:
-                res = self.loader.load(ref, sn)
-            except LoadFailure as e:
-                self.fail(e, ref.rel_path, size_bytes=ref.size_bytes, mime=sn.mime_type, mtime_ns=ref.mtime_ns)
-                continue
-            except (OSError, UnicodeError, MemoryError) as e:
-                stage = "decode" if isinstance(e, UnicodeError) else "read"
-                self.fail(LoadFailure(stage, str(e), errno=getattr(e, "errno", None), exc_type=type(e).__name__),
-                          ref.rel_path, size_bytes=ref.size_bytes, mime=sn.mime_type, mtime_ns=ref.mtime_ns)
+            res = self.attempt(self.loader.load, ref, sn, mime=sn.mime_type)
+            if res is None:
                 continue
             if isinstance(res, Skip):
                 self.skip(res, mime=sn.mime_type, mtime_ns=ref.mtime_ns)
                 continue
-            if res.sha256 in seen:  # DEDUP = "skip": first in sorted order wins
+            if res.sha256 in seen:  # duplicate content: first in sorted order wins
                 self.skip(Skip(res.doc_id, "duplicate", res.size_bytes, f"duplicate_of={seen[res.sha256]}"),
                           sha256=res.sha256, mime=res.mime_type, mtime_ns=ref.mtime_ns)
                 continue
@@ -241,23 +243,19 @@ class Run:
             code = ExitCode.PARTIAL if self.errors else ExitCode.OK
             try:
                 data = cli_engine.emit(payload, self.out_file, self.quiet)
-                art = {"path": str(self.out_file), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-            except (BrokenPipeError, OSError) as e:
-                if not isinstance(e, BrokenPipeError) and e.errno != errno.EINVAL:
-                    raise Fatal(f"artifact write failed: {e}") from e
-                with contextlib.suppress(OSError, ValueError, AttributeError):  # reader closed stdout
+            except StdoutClosed as e:  # only after the commit point: keep the computed exit code
+                data = e.data
+                with contextlib.suppress(OSError, ValueError):  # quiet the flush at interpreter exit
                     os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
-                self.log.warning("stdout closed by the reader after the artifact was committed")
-                with self.out_file.open("rb") as f:
-                    art = {"path": str(self.out_file), "bytes": self.out_file.stat().st_size,
-                           "sha256": hashlib.file_digest(f, "sha256").hexdigest()}
+                self.log.warning(str(e))
+            except OSError as e:  # before the commit point: the previous artifact is untouched
+                raise Fatal(f"artifact write failed: {e}") from e
+            art = {"path": str(self.out_file), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
             self.log.info(f"write {self.out_file} {art['bytes']}")
             return self.finish(code, "partial" if self.errors else "ok", art)
         except Fatal as e:
             self.log.error(str(e))
             return self.finish(ExitCode.FATAL, "failed", None)
-        except (KeyboardInterrupt, typer.Exit):
-            raise
         except Exception as e:  # unexpected: FATAL with a report, traceback at DEBUG
             self.log.error(f"unexpected {type(e).__name__}: {e}")
             self.log.debug("traceback", exc_info=True)
@@ -365,19 +363,25 @@ def main(
         raise typer.BadParameter(f"{log_level!r} is not one of {', '.join(LOG_LEVELS)}", param_hint="--log-level")
     if encoding:
         try:
-            encoding = codecs.lookup(encoding).name
+            info = codecs.lookup(encoding)
         except LookupError:
-            raise typer.BadParameter(f"unknown codec {encoding!r}", param_hint="--encoding") from None
-    exclude_dir = None
-    out_dir = out_file.resolve().parent
+            info = None
+        # bytes.decode refuses non-text codecs (base64, hex, rot13, zlib) by this same flag
+        if info is None or not getattr(info, "_is_text_encoding", True):
+            raise typer.BadParameter(f"{encoding!r} is not a text codec", param_hint="--encoding")
+        encoding = info.name
+    art = out_file.resolve()
+    excluded: tuple[str, ...] = ()  # never load our own outputs
     if source_dir is not None and source_dir.is_dir():
         src = source_dir.resolve()
-        if out_dir != src and out_dir.is_relative_to(src):
-            exclude_dir = str(out_dir)
+        if art.parent == src:
+            excluded = (str(art), str(art.with_name(art.stem + ".report.json")))
+        elif art.parent.is_relative_to(src):
+            excluded = (str(art.parent),)
     opts = FilesystemOptions(
         recursive=recursive, include=split_csv(include), exclude=split_csv(exclude), include_hidden=include_hidden,
         max_file_bytes=max_file_bytes, types=split_csv(types), encoding_policy=encoding_policy.value,
-        encoding=encoding, exclude_dir=exclude_dir)
+        encoding=encoding, max_files=max_files, exclude_paths=excluded)
     try:
         loader = get_loader(backend, opts)
     except ValueError as e:
@@ -388,21 +392,19 @@ def main(
             "max_files": max_files, "max_file_bytes": max_file_bytes, "max_total_bytes": max_total_bytes,
             "types": types, "encoding_policy": encoding_policy.value, "encoding": encoding, "strict": strict}
     before = out_file.stat().st_mtime_ns if out_file.exists() else None
-    previous = {}
-    for name in ("SIGBREAK", "SIGTERM"):  # Windows Ctrl-Break / POSIX kill -> KeyboardInterrupt -> 130
-        sig = getattr(signal, name, None)
-        if sig is not None and (name == "SIGBREAK") == (os.name == "nt"):
-            with contextlib.suppress(ValueError):  # not the main thread
-                previous[sig] = signal.signal(sig, _interrupt)
+    sig = signal.SIGBREAK if os.name == "nt" else signal.SIGTERM  # Ctrl-Break / kill -> KeyboardInterrupt -> 130
+    previous = None
+    with contextlib.suppress(ValueError):  # not the main thread
+        previous = signal.signal(sig, _interrupt)
     try:
-        code = Run(loader, source_dir, out_file, max_files, max_total_bytes, strict, quiet, args, log).execute()
+        code = Run(loader, source_dir, out_file, max_total_bytes, strict, quiet, args, log).execute()
     except KeyboardInterrupt:
         now = out_file.stat().st_mtime_ns if out_file.exists() else None
         log.error(f"interrupted; artifact {'committed' if now != before else 'untouched'}")
         raise typer.Exit(ExitCode.INTERRUPTED) from None
     finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        if previous is not None:
+            signal.signal(sig, previous)
     raise typer.Exit(code)
 
 

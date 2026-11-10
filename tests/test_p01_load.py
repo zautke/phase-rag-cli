@@ -196,6 +196,7 @@ def test_n4_nul_txt_is_binary_skip(tmp_path: Path) -> None:
     out = tmp_path / "o.json"
     assert invoke("-s", str(src), "-o", str(out)).exit_code == 0
     assert [(s.path, s.reason) for s in artifact(out).skipped] == [("n.txt", "binary:nul_bytes")]
+    assert report(out)["status"] == "ok"
 
 
 def test_n4b_pdf_signature_in_md_is_binary_skip(tmp_path: Path) -> None:
@@ -203,6 +204,7 @@ def test_n4b_pdf_signature_in_md_is_binary_skip(tmp_path: Path) -> None:
     out = tmp_path / "o.json"
     assert invoke("-s", str(src), "-o", str(out)).exit_code == 0
     assert [(s.path, s.reason) for s in artifact(out).skipped] == [("fake.md", "binary:application/pdf")]
+    assert report(out)["status"] == "ok"
 
 
 def test_n5_invalid_utf8_plus_good_is_partial_with_offset(tmp_path: Path) -> None:
@@ -211,6 +213,7 @@ def test_n5_invalid_utf8_plus_good_is_partial_with_offset(tmp_path: Path) -> Non
     assert invoke("-s", str(src), "-o", str(out)).exit_code == 3
     (err,) = artifact(out).errors
     assert (err.path, err.stage, err.offset, err.exc_type) == ("bad.txt", "decode", 3, "UnicodeDecodeError")
+    assert report(out)["status"] == "partial" and report(out)["exit_code"] == 3
 
 
 def test_n5a_replace_policy_loads_and_counts(tmp_path: Path) -> None:
@@ -254,6 +257,7 @@ def test_max_files_breach_is_fatal(tmp_path: Path) -> None:
     src = corpus(tmp_path, {"a.md": b"a", "b.md": b"b", "c.md": b"c"})
     out = tmp_path / "o.json"
     assert invoke("-s", str(src), "-o", str(out), "-n", "2").exit_code == 1 and not out.exists()
+    assert report(out)["status"] == "failed" and report(out)["artifact"] is None
 
 
 def test_n8_enospc_keeps_previous_artifact_and_no_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +270,8 @@ def test_n8_enospc_keeps_previous_artifact_and_no_tmp(tmp_path: Path, monkeypatc
         raise OSError(errno.ENOSPC, "No space left on device")
 
     monkeypatch.setattr(rc.os, "fsync", full)
-    assert invoke("-s", str(src), "-o", str(out)).exit_code == 1
+    res = invoke("-s", str(src), "-o", str(out))
+    assert res.exit_code == 1 and res.stdout_bytes == b""
     assert out.read_bytes() == b"previous" and no_tmp(out.parent)
 
 
@@ -291,12 +296,14 @@ def test_n10_interrupt_exits_130_without_tmp(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(fs.FilesystemLoader, "load", interrupted)
     assert invoke("-s", str(src), "-o", str(out)).exit_code == 130
     assert not out.exists() and no_tmp(tmp_path)
+    assert not out.with_name("01.report.json").exists()  # spec §6: no report on 130
 
 
 def test_n11_strict_first_error_is_fatal_and_writes_nothing(tmp_path: Path) -> None:
     src = corpus(tmp_path, {**GOOD, "bad.txt": b"\xff"})
     out = tmp_path / "o.json"
     assert invoke("-s", str(src), "-o", str(out), "-S").exit_code == 1 and not out.exists()
+    assert report(out)["status"] == "failed" and report(out)["artifact"] is None
 
 
 def test_n14_redirected_stderr_has_no_ansi_and_n15_stdout_is_pure_under_errors(tmp_path: Path) -> None:
@@ -330,7 +337,7 @@ def test_n22_same_stem_different_extension_keeps_full_ids(tmp_path: Path) -> Non
     assert {d.doc_id: d.mime_type for d in artifact(out).documents} == {"a.html": "text/html", "a.md": "text/markdown"}
 
 
-@pytest.mark.parametrize("args", [["-E", "ignore"], ["-E", "surrogateescape"], ["-e", "no-such-codec"],
+@pytest.mark.parametrize("args", [["-E", "ignore"], ["-E", "surrogateescape"], ["-e", "no-such-codec"], ["-e", "base64"],
                                   ["-L", "LOUD"]])
 def test_n23_bad_policy_codec_or_level_exits_2(tmp_path: Path, args: list[str]) -> None:
     res = invoke("-s", str(corpus(tmp_path, GOOD)), "-o", str(tmp_path / "o.json"), *args)
@@ -373,25 +380,131 @@ def test_n27_out_file_inside_source_dir_is_excluded(tmp_path: Path) -> None:
     assert [(s.path, s.reason) for s in artifact(out).skipped] == [("art", "out_dir")]
 
 
-def test_broken_stdout_after_commit_keeps_the_computed_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+class ClosedStdout:
+    """sys.stdout stand-in for rag_contracts: the binary write fails like a reader-closed pipe."""
+
+    def __init__(self, err: OSError) -> None:
+        self.err, self.buffer = err, self
+
+    def write(self, data: bytes) -> int:
+        raise self.err
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("err", [BrokenPipeError(errno.EPIPE, "Broken pipe"), OSError(errno.EINVAL, "Invalid argument")])
+def test_stdout_closed_after_commit_keeps_the_computed_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: OSError
 ) -> None:
     src = corpus(tmp_path, {**GOOD, "bad.txt": b"\xff"})
     out = tmp_path / "o.json"
-    real = p01_load.cli_engine.emit
+    dup2_calls: list[tuple[int, int]] = []
+    real_emit = p01_load.cli_engine.emit
 
-    def emit_then_pipe_closed(payload, out_file, quiet=False):
-        real(payload, out_file, quiet)
-        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+    kept = []
 
-    monkeypatch.setattr(p01_load.cli_engine, "emit", emit_then_pipe_closed)
+    def emit_into_closed_pipe(payload, out_file, quiet=False):  # CliRunner swaps sys.stdout at invoke time
+        kept.append(sys.stdout)  # keep CliRunner's wrapper alive (GC would close its buffer); it restores it
+        sys.stdout = ClosedStdout(err)
+        return real_emit(payload, out_file, quiet)
+
+    monkeypatch.setattr(p01_load.cli_engine, "emit", emit_into_closed_pipe)
+    monkeypatch.setattr(p01_load.os, "dup2", lambda a, b: dup2_calls.append((a, b)))  # never touch pytest's fd 1
     assert invoke("-s", str(src), "-o", str(out)).exit_code == 3
-    assert report(out)["artifact"]["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
+    assert [b for _, b in dup2_calls] == [1]
+    rep = report(out)
+    assert rep["status"] == "partial" and rep["artifact"]["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
 
 
-# --- real corpus (live: adagio, docs/__test_data__ is not in git) -----------------------------------------
+def test_einval_before_the_commit_is_fatal_and_keeps_the_previous_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review A I2 / B I2: an EINVAL from the artifact write is not 'stdout closed after commit'."""
+    src = corpus(tmp_path, GOOD)
+    out = tmp_path / "o" / "01.json"
+    out.parent.mkdir()
+    out.write_bytes(b"previous")
+    real = rc.os.fsync
+
+    def einval_on_artifact(fd: int) -> None:
+        if not out.with_name("01.report.json").exists() and not getattr(einval_on_artifact, "done", False):
+            einval_on_artifact.done = True
+            raise OSError(errno.EINVAL, "Invalid argument")
+        real(fd)
+
+    monkeypatch.setattr(rc.os, "fsync", einval_on_artifact)
+    res = invoke("-s", str(src), "-o", str(out))
+    assert res.exit_code == 1 and res.stdout_bytes == b""
+    assert out.read_bytes() == b"previous" and no_tmp(out.parent)
+    assert report(out)["status"] == "failed" and report(out)["artifact"] is None
+
+
+def test_unreadable_last_directory_is_an_error_not_silence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A B1 / B B1: a scandir failure on the last directory used to vanish (exit 0, errors [])."""
+    src = corpus(tmp_path, {**GOOD, "adir/c.md": b"c", "zz_last/b.md": b"b"})
+    real = fs.os.scandir
+
+    def fake(path):
+        if Path(fs.strip_long_prefix(str(path))).name == "zz_last":
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(fs.os, "scandir", fake)
+    out = tmp_path / "o.json"
+    assert invoke("-s", str(src), "-o", str(out)).exit_code == 3
+    assert [(e.path, e.stage) for e in artifact(out).errors] == [("zz_last", "discover")]
+    assert report(out)["status"] == "partial"
+
+
+def test_sniff_read_error_is_isolated_to_its_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review A I1 / B I1: a byte-range lock on one file used to make the whole run FATAL."""
+    src = corpus(tmp_path, {**GOOD, "locked.md": b"x"})
+    real = open
+
+    class LockedRead:
+        def __init__(self, f):
+            self.f = f
+
+        def read(self, n=-1):
+            raise PermissionError(errno.EACCES, "locked a portion of the file")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+    def guarded(path, *a, **k):
+        f = real(path, *a, **k)
+        return LockedRead(f) if str(path).endswith("locked.md") else f
+
+    monkeypatch.setattr(fs, "open", guarded, raising=False)
+    out = tmp_path / "o.json"
+    assert invoke("-s", str(src), "-o", str(out)).exit_code == 3
+    assert [(e.path, e.stage) for e in artifact(out).errors] == [("locked.md", "read")]
+    assert [d.doc_id for d in artifact(out).documents] == ["good.md"]
+
+
+def test_out_file_in_the_source_root_is_excluded_by_name(tmp_path: Path) -> None:
+    """Review A M4 / B M2: a re-run must not load its own previous artifact or report."""
+    src = corpus(tmp_path, GOOD)
+    out = src / "01.json"
+    args = ("-s", str(src), "-o", str(out), "-t", "text/markdown,application/json")
+    assert invoke(*args).exit_code == 0
+    assert invoke(*args).exit_code == 0
+    assert [d.doc_id for d in artifact(out).documents] == ["good.md"]
+    assert [(s.path, s.reason) for s in artifact(out).skipped] == [("01.json", "out_dir"), ("01.report.json", "out_dir")]
+
+
+def test_short_help_switch() -> None:
+    res = invoke("-h")
+    assert res.exit_code == 0 and "--source-dir" in res.output
+
+
+# --- real corpus (live; 8 small documents are tracked, the two > 5 MB ones are gitignored) -----------------
 def manifest() -> list[dict]:
-    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+    return json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.is_file() else []
 
 
 def check_doc(doc: rc.RawDocument, m: dict) -> None:
@@ -400,7 +513,8 @@ def check_doc(doc: rc.RawDocument, m: dict) -> None:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="real corpus absent")
+@pytest.mark.skipif(not all((CORPUS / m["name"]).is_file() for m in manifest()),
+                    reason="a manifest document is absent (the two > 5 MB files are gitignored)")
 def test_live_real_corpus_directory_matches_manifest(tmp_path: Path) -> None:
     out = tmp_path / "01.json"
     proc = subproc("-s", str(CORPUS), "-o", str(out), "-q")
@@ -415,9 +529,10 @@ def test_live_real_corpus_directory_matches_manifest(tmp_path: Path) -> None:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="real corpus absent")
-@pytest.mark.parametrize("m", manifest() if MANIFEST.is_file() else [], ids=lambda m: m["name"][:40])
+@pytest.mark.parametrize("m", manifest(), ids=lambda m: m["name"][:40])
 def test_live_each_real_document_alone(tmp_path: Path, m: dict) -> None:
+    if not (CORPUS / m["name"]).is_file():
+        pytest.skip(f"{m['name']} absent (gitignored when > 5 MB)")
     out = tmp_path / "01.json"
     proc = subproc("-s", str(CORPUS / m["name"]), "-o", str(out), "-q")
     assert proc.returncode == 0, proc.stderr.decode()[-800:]

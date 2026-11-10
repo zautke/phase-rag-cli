@@ -32,8 +32,7 @@ class Sniff:
     mime_source: str  # signature | extension | content | default
     encoding: str
     bom_len: int
-    supported: bool
-    reason: str | None = None  # skip reason when not supported
+    reason: str | None = None  # skip reason; None = supported, load it
 
 
 @dataclass(frozen=True)

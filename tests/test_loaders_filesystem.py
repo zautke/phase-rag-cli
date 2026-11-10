@@ -72,7 +72,7 @@ def test_discover_non_recursive_include_exclude_and_out_dir(tmp_path: Path) -> N
     assert discover(loader(recursive=False), tmp_path)[0] == ["a.md", "c.txt"]
     refs, skips = discover(loader(include=("*.md",), exclude=("sub/*",)), tmp_path)
     assert refs == ["a.md"] and skips == {"c.txt": "excluded", "sub/b.md": "excluded"}
-    refs, skips = discover(loader(exclude_dir=str(tmp_path / "sub")), tmp_path)
+    refs, skips = discover(loader(exclude_paths=(str(tmp_path / "sub"),)), tmp_path)
     assert refs == ["a.md", "c.txt"] and skips == {"sub": "out_dir"}
 
 
@@ -128,7 +128,7 @@ def test_sniff(tmp_path: Path, name: str, data: bytes, mime: str, source: str, r
     p = tmp_path / name
     p.write_bytes(data)
     s = loader().sniff(ref_for(p))
-    assert (s.mime_type, s.mime_source, s.reason, s.supported) == (mime, source, reason, reason is None)
+    assert (s.mime_type, s.mime_source, s.reason) == (mime, source, reason)
 
 
 @pytest.mark.parametrize(
@@ -140,7 +140,7 @@ def test_sniff_bom_families_are_text_despite_nul_bytes(tmp_path: Path, bom: byte
     p = tmp_path / "b.txt"
     p.write_bytes(bom + "hi\r\n".encode(enc))
     s = loader().sniff(ref_for(p))
-    assert (s.encoding, s.bom_len, s.supported) == (enc, bom_len, True)
+    assert (s.encoding, s.bom_len, s.reason) == (enc, bom_len, None)
     d = loader().load(ref_for(p), s)
     assert (d.raw_content, d.bom, d.newline_style) == ("hi\r\n", enc, "crlf")
 
@@ -296,6 +296,10 @@ def test_unstable_file_is_reread_once_then_fails(tmp_path: Path, monkeypatch: py
     assert ei.value.stage == "unstable" and n[0] == 4  # 2 attempts x (before, after)
 
 
+class SharingViolation(PermissionError):
+    winerror = 32  # what Windows sets for a file another process holds open without sharing
+
+
 def test_locked_file_is_retried_then_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = tmp_path / "l.txt"
     p.write_bytes(b"hello")
@@ -308,7 +312,7 @@ def test_locked_file_is_retried_then_reported(tmp_path: Path, monkeypatch: pytes
     def locked(*a, **k):
         calls.append(1)
         if len(calls) <= 2:
-            raise PermissionError(13, "sharing violation")
+            raise SharingViolation(13, "sharing violation")
         return real_open(*a, **k)
 
     monkeypatch.setattr(fs, "RETRY_LOCKS", True)
@@ -326,3 +330,100 @@ def test_lone_surrogate_path_is_escaped(tmp_path: Path) -> None:
     rel, lossy = fs.display_path("bad_\udc80.txt")
     assert (rel, lossy) == ("bad_\\udc80.txt", True)
     assert fs.display_path("ok.txt") == ("ok.txt", False)
+
+
+def test_access_denied_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only sharing/lock violations (winerror 32/33) are transient; an ACL denial fails at once."""
+    p = tmp_path / "d.txt"
+    p.write_bytes(b"x")
+    calls: list[int] = []
+
+    def denied(*a, **k):
+        calls.append(1)
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(fs, "RETRY_LOCKS", True)
+    monkeypatch.setattr(fs.time, "sleep", lambda s: pytest.fail("slept on a permanent denial"))
+    monkeypatch.setattr(fs, "open", denied, raising=False)
+    with pytest.raises(LoadFailure) as ei:
+        loader().sniff(ref_for(p))
+    assert ei.value.stage == "open" and len(calls) == 1
+
+
+# --- fix round 1: discovery errors are never lost (review A B1 / B B1), listing is bounded (A I3) -------
+def scandir_failing_for(monkeypatch: pytest.MonkeyPatch, failing: str) -> None:
+    real = fs.os.scandir
+
+    def fake(path):
+        if Path(fs.strip_long_prefix(str(path))).name == failing:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(fs.os, "scandir", fake)
+
+
+def test_discover_reports_an_unreadable_last_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "a.md").write_text("a")
+    (tmp_path / "adir").mkdir()
+    (tmp_path / "adir" / "c.md").write_text("c")
+    (tmp_path / "zz_last").mkdir()
+    (tmp_path / "zz_last" / "b.md").write_text("b")
+    scandir_failing_for(monkeypatch, "zz_last")
+    items = list(loader().discover(str(tmp_path)))
+    fails = [(i.stage, i.path) for i in items if isinstance(i, LoadFailure)]
+    assert fails == [("discover", "zz_last")]
+    assert sorted(i.rel_path for i in items if isinstance(i, SourceRef)) == ["a.md", "adir/c.md"]
+
+
+def test_discover_reports_an_unreadable_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    scandir_failing_for(monkeypatch, "root")
+    items = list(loader().discover(str(root)))
+    assert [(i.stage, i.path) for i in items] == [("discover", ".")]
+
+
+def test_discover_stops_listing_at_max_files_plus_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    consumed = [0]
+
+    class Entries:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            for i in range(10 + 50):
+                consumed[0] += 1
+                yield SimpleNamespace(name=f"f{i:03}.md")
+
+    monkeypatch.setattr(fs.os, "scandir", lambda path: Entries())
+    with pytest.raises(LoadFailure) as ei:
+        list(loader(max_files=10).discover(str(tmp_path)))
+    assert ei.value.stage == "limit" and consumed[0] == 11
+
+
+def test_sniff_read_error_is_a_read_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A byte-range lock (WinError 33) or EIO hits the read, not the open."""
+    p = tmp_path / "r.md"
+    p.write_bytes(b"locked region")
+    real_open = builtins.open
+
+    class Locked:
+        def __init__(self, f):
+            self.f = f
+
+        def read(self, n=-1):
+            raise PermissionError(13, "The process cannot access the file because another process has locked a portion")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+    monkeypatch.setattr(fs, "open", lambda *a, **k: Locked(real_open(*a, **k)), raising=False)
+    with pytest.raises(LoadFailure) as ei:
+        loader().sniff(ref_for(p))
+    assert (ei.value.stage, ei.value.errno, ei.value.path) == ("read", 13, "r.md")
