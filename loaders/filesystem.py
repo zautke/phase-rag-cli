@@ -223,7 +223,8 @@ class FilesystemLoader:
         for _ in range(STABILITY_RETRIES + 1):
             with self._open(ref) as f:
                 st0 = os.fstat(f.fileno())
-                data = f.read(cap + 1)  # one bounded read: never more than cap+1 bytes in memory
+                # one bounded read; read(n) pre-allocates n bytes, so size it by the file (+1 detects growth)
+                data = f.read(min(cap, st0.st_size) + 1)
                 st1 = os.fstat(f.fileno())
             if len(data) > cap:
                 raise LoadFailure("limit", f"file grew past max_file_bytes {cap}", path=ref.rel_path,

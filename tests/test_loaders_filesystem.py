@@ -173,6 +173,7 @@ def spy_reads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
         def read(self, n=-1):
             b = self.f.read(n)
             reads.append(len(b))
+            requested.append(n)
             return b
 
         def fileno(self):
@@ -186,6 +187,22 @@ def spy_reads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
     monkeypatch.setattr(fs, "open", lambda *a, **k: Spy(real_open(*a, **k)), raising=False)
     return reads
+
+
+requested: list[int] = []
+
+
+def test_load_buffer_is_sized_by_the_file_not_the_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """read(n) pre-allocates n bytes: read(cap+1) cost 256 MiB of RSS for a 532-byte file (smoke run)."""
+    p = tmp_path / "small.md"
+    p.write_bytes(b"x" * 100)
+    ld = loader()  # default cap 256 MiB
+    r = ref_for(p)
+    s = ld.sniff(r)
+    spy_reads(monkeypatch)
+    requested.clear()
+    assert ld.load(r, s).size_bytes == 100
+    assert max(requested) == 101  # size + 1 still detects growth (-> re-read / unstable / limit)
 
 
 def test_load_reads_at_most_cap_plus_one_when_file_grew(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
