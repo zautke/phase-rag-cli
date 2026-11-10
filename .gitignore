@@ -13,3 +13,7 @@ dist/
 build/
 .env
 verify_logs/
+
+# test corpus stress files (>5 MB; sha256 + source path in docs/TEST_DATA_MANIFEST.json)
+docs/__test_data__/2026-11-08T190906Z-adagio.html
+docs/__test_data__/offline_currentversion_d.txt

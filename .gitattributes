@@ -1,0 +1,2 @@
+# test corpus: byte-exact (sha256 in docs/TEST_DATA_MANIFEST.json); never convert line endings
+docs/__test_data__/** -text
