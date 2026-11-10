@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 import hybrid_engine as he
+import loaders.filesystem as loaders_fs
 import p00_crag_orchestrator as p00
 import p01_load
 import p02_markdown
@@ -26,6 +27,7 @@ import p08_rerank
 import p09_generate
 import p10_evaluate
 import rag_contracts as rc
+import rag_logging
 
 ROOT = Path(__file__).resolve().parent.parent
 ALL_CLIS = (p00, p01_load, p02_markdown, p03_parse, p04_chunk, p05_index, p06_query,
@@ -55,9 +57,11 @@ def test_every_rag_env_key_matches_its_default_constant() -> None:
     assert rag_keys
     for key, value in rag_keys.items():
         name = "DEFAULT_" + key.removeprefix("RAG_")
-        holders = [m for m in (rc, he) if hasattr(m, name)]
+        holders = [m for m in (rc, he, loaders_fs, rag_logging) if hasattr(m, name)]
         assert len(holders) == 1, f"{key}: expected exactly one {name} constant, found {len(holders)}"
-        assert str(getattr(holders[0], name)) == value, f"{key}={value} != {name}"
+        default = getattr(holders[0], name)
+        text = str(default).lower() if isinstance(default, bool) else str(default)  # .env writes true/false
+        assert text == value, f"{key}={value} != {name}={default!r}"
 
 
 def test_p08_backend_and_model_read_the_same_env_keys_as_p05() -> None:

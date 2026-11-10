@@ -60,7 +60,9 @@ def test_ast_no_bare_print_in_any_module() -> None:
     """Zero print() to stdout in every phase/engine module (stdout is the JSON payload only)."""
     root = Path(__file__).resolve().parent.parent
     modules = [*root.glob("p[0-9][0-9]_*.py"), *(root / f"{n}.py" for n in (
-        "rag_contracts", "hybrid_engine", "chunkers", "model_fetch"))]
+        "rag_contracts", "hybrid_engine", "chunkers", "model_fetch", "rag_logging")),
+        *(root / "loaders").glob("*.py")]
+    assert any(m.parent.name == "loaders" for m in modules)
     for fpath in modules:
         tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fpath.name)
         for node in ast.walk(tree):

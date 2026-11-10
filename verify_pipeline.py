@@ -35,7 +35,8 @@ PHASES = [  # (number, module, output schema)
     ("10", "p10_evaluate", "Phase10EvalOutput"),
 ]
 AUDITED = [m for _, m, _ in PHASES] + [
-    "p00_crag_orchestrator", "rag_contracts", "hybrid_engine", "chunkers", "model_fetch"]
+    "p00_crag_orchestrator", "rag_contracts", "hybrid_engine", "chunkers", "model_fetch", "rag_logging",
+    *(f"loaders/{p.stem}" for p in sorted((ROOT / "loaders").glob("*.py")))]
 PIPE = [  # Stage 2: (cli, args)
     ("rag-p01", []), ("rag-p02", []), ("rag-p03", []),
     ("rag-p04", ["--max-words", "50", "--overlap", "10"]),
@@ -56,7 +57,7 @@ Runs the 4-stage verification battery (cwd-independent; PASS = exit 0):
            phase type-chain continuity, client.close() in p05/p07; then wipes artifacts/ + qdrant_storage/
   Stage 1: isolated rag-p01..p10 (+ p04 -s recursive): exit 0, stderr panel, artifact on disk,
            stdout == disk validates with the phase model; negatives (strategy, dense backend,
-           missing --in-file) must exit 2 with empty stdout
+           missing --in-file, missing p01 --source-dir) must exit 2 with empty stdout
   Stage 2: full 10-phase `uv run` pipe via Popen chain, every exit checked
   Stage 3: rag-p00 CRAG loop: --crag-threshold 0.99 must NOT converge (3 REWRITE_REQUIRED attempts,
            3 distinct queries); default run must go
@@ -181,6 +182,9 @@ class Battery:
         self.banner("STAGE 1: ISOLATED PHASES 01 -> 10 + NEGATIVES")
         ph = self.phase
         ph("rag-p01", "01", ["rag-p01", "-o", a("01_loaded.json")], a("01_loaded.json"), "Phase01LoadedOutput")
+        # pipes hide exit codes: assert p01's own usage exit standalone (a typo'd --source-dir is exit 2, never the demo)
+        self.negative("NEG rag-p01 missing --source-dir", "neg_source",
+                      ["rag-p01", "-s", a("no_such_dir"), "-o", a("_neg.json")], "exist")
         ph("rag-p02", "02", ["rag-p02", "-i", a("01_loaded.json"), "-o", a("02_markdown.json")],
            a("02_markdown.json"), "Phase02MarkdownOutput")
         ph("rag-p03", "03", ["rag-p03", "-i", a("02_markdown.json"), "-o", a("03_parsed.json")],

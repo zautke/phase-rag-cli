@@ -58,6 +58,8 @@ include = [
     "p08_rerank.py",
     "p09_generate.py",
     "p10_evaluate.py",
+    "rag_logging.py",
+    "loaders",
 ]
 
 [tool.uv]
@@ -79,4 +81,4 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 addopts = "-m 'not live'"
-markers = ["live: loads real models (minutes, GBs of RAM); run with -m live"]
+markers = ["live: real models or the real corpus in docs/__test_data__ (minutes, GBs of RAM); run with -m live"]
