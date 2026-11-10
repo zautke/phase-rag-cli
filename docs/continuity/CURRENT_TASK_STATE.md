@@ -1,5 +1,13 @@
 # CURRENT TASK STATE
 
+## Status as of 2026-11-10 (handoff) — branch `feat/minimal-pluggability` @ a134d95 — READ `HANDOFF_NEXT_SESSION.md` FIRST
+
+- HEAD `a134d95` (pushed): D-E1 batched encoding + D-E3 answer evidence/faithfulness, recovered from a usage-cap-killed fix agent; 136 non-live tests pass, ruff clean (RUN #131). **Live-unverified** — PRE-VERIFY 2 is the next gate.
+- Demo attempt 1 (RUN #125) failed on demo-script bugs (fixed + reviewed); PRE-VERIFY 1 (RUN #126–#130) failed at p05 `MemoryError 7.80 GiB` = D-E1. The user has NOT yet seen a clean run; nothing is signed off.
+- New non-negotiables (kb protocol + memory): input-scaling review check in every reviewer brief; gates on the real corpus with N + peak RSS; pre-verify the exact demo script non-interactively before any console demo; errors/unexpected short-circuit the demo.
+- Open defect D-E2 (p04 parent_markdown ×12.9 bloat) scheduled as Task 8 after the demo signoff.
+- The sections below describe the state at 2026-11-07 15:46 and remain accurate for everything before `62b0dc7`.
+
 ## Status as of 2026-11-07 15:46 MST — branch `feat/minimal-pluggability` @ 62b0dc7 (release 0.2.0 fix wave, live gate in progress)
 
 - **Worktree / branch:** `C:\Users\me\dev\phase-rag-cli-wt-feat`, branch `feat/minimal-pluggability`, HEAD `62b0dc7` (`fix(ci): set executable bit on shebang scripts (ruff EXE001)`), on top of `50c6467` (test corpus + continuity restored). Base of the plan: `198f343`. The main checkout `C:\Users\me\dev\phase-rag-cli` belongs to concurrent Codex CLI sessions: do not touch it.
