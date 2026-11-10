@@ -1,23 +1,27 @@
 #!/usr/bin/env pwsh
 # tests/live/load_negatives.ps1 -- rag-p01 live negatives on Windows (Load SPEC §9). Linux twin: load_negatives.sh
-param([Parameter(ValueFromRemainingArguments)][string[]]$Rest)
+# SHARED cases (same names in both twins): exit2-missing-source exit4-empty-dir exit0-ok exit3-partial
+#   exit1-total-cap unreadable-file unreadable-last-dir link-loop long-path-488 dot-file-hidden
+#   stdout-closed-early interrupt
+# WINDOWS-ONLY: locked-destination byte-range-lock-sniff hidden-attribute
+# No param() block on purpose: it would make the script "advanced" and -w would clash with -WarningAction.
 $ErrorActionPreference = 'Stop'
 
 function Usage {
     "Usage: ./tests/live/load_negatives.ps1 [-w | --work-dir PATH] [-k | --keep] [-h | --help]"
-    "Runs rag-p01 (venv python p01_load.py) live negatives: exit codes, exclusive source lock, locked destination,"
-    "Ctrl-Break, junction loop, 488-char path, HIDDEN attribute, stdout closed after 10 bytes (payload > 64 KiB)."
+    "Runs rag-p01 (venv python p01_load.py) live negatives: the shared cases above plus Windows-only locks"
+    "(exclusive, byte-range, destination), junction loop, HIDDEN attribute, real Ctrl-Break."
     "  -w, --work-dir PATH  scratch root (default: TEMP\rag-load-neg-<utc>)"
     "  -k, --keep           keep the scratch root"
     "  -h, --help           show this help"
     "One PASS/FAIL line per case, then one JSON summary line. Exit 0 only when every case passes."
 }
-$work = $null; $keep = $false
-for ($i = 0; $i -lt $Rest.Count; $i++) {
-    switch -Regex ($Rest[$i]) {
+$argv = @($args); $work = $null; $keep = $false
+for ($i = 0; $i -lt $argv.Count; $i++) {
+    switch -Regex ($argv[$i]) {
         '^(-h|--help)$' { Usage; exit 0 }
         '^(-k|--keep)$' { $keep = $true }
-        '^(-w|--work-dir)$' { $i++; $work = $Rest[$i] }
+        '^(-w|--work-dir)$' { $i++; if ($i -ge $argv.Count) { Usage; exit 2 }; $work = $argv[$i] }
         default { Usage; exit 2 }
     }
 }
@@ -25,26 +29,23 @@ $repo = (Resolve-Path "$PSScriptRoot/../..").Path
 if (-not $work) { $work = Join-Path $env:TEMP ("rag-load-neg-" + (Get-Date -AsUTC -Format yyyyMMddTHHmmss)) }
 New-Item -ItemType Directory -Force $work | Out-Null
 $py = (& uv run --project $repo python -c "import sys; print(sys.executable)" | Select-Object -Last 1).Trim()
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $results = [Collections.Generic.List[object]]::new()
 
 function B([string]$s) { [Text.Encoding]::UTF8.GetBytes($s) }
 function New-Corpus([string]$name, [hashtable]$files) {
     $d = Join-Path $work $name; New-Item -ItemType Directory -Force $d | Out-Null
-    foreach ($k in $files.Keys) { [IO.File]::WriteAllBytes((Join-Path $d $k), [byte[]]$files[$k]) }
+    foreach ($k in $files.Keys) { New-Item -ItemType Directory -Force (Split-Path (Join-Path $d $k)) | Out-Null; [IO.File]::WriteAllBytes((Join-Path $d $k), [byte[]]$files[$k]) }
     $d
 }
-function Start-P01([string[]]$argv) {
+function Invoke-P01([string[]]$pargs, [int]$stopAfter = -1) {
     $psi = [Diagnostics.ProcessStartInfo]::new($py)
-    foreach ($a in @("$repo\p01_load.py") + $argv) { $psi.ArgumentList.Add($a) }
+    foreach ($a in @("$repo\p01_load.py") + $pargs) { $psi.ArgumentList.Add($a) }
     $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.UseShellExecute = $false
     $psi.WorkingDirectory = $repo
-    [Diagnostics.Process]::Start($psi)
-}
-function Invoke-P01([string[]]$argv, [int]$stopAfter = -1) {
-    $sw = [Diagnostics.Stopwatch]::StartNew(); $p = Start-P01 $argv; $err = $p.StandardError.ReadToEndAsync()
+    $sw = [Diagnostics.Stopwatch]::StartNew(); $p = [Diagnostics.Process]::Start($psi); $err = $p.StandardError.ReadToEndAsync()
     $ms = [IO.MemoryStream]::new(); $s = $p.StandardOutput.BaseStream
-    if ($stopAfter -ge 0) { $buf = [byte[]]::new($stopAfter); [void]$s.Read($buf, 0, $stopAfter); $s.Close() }
-    else { $s.CopyTo($ms) }
+    if ($stopAfter -ge 0) { $buf = [byte[]]::new($stopAfter); [void]$s.Read($buf, 0, $stopAfter); $s.Close() } else { $s.CopyTo($ms) }
     $p.WaitForExit()
     [pscustomobject]@{ Code = $p.ExitCode; Out = $ms.ToArray(); Err = $err.Result; Ms = $sw.ElapsedMilliseconds }
 }
@@ -55,9 +56,10 @@ function Check([string]$case, $r, [bool]$ok, [string]$note) {
 }
 function Art([string]$path) { [IO.File]::ReadAllText($path) | ConvertFrom-Json }
 function NoTmp([string]$dir) { -not (Get-ChildItem -Force $dir -Filter '.*.tmp' -ErrorAction SilentlyContinue) }
+function Err0([string]$o) { $e = (Art $o).errors; if ($e) { "$($e[0].path)|$($e[0].stage)" } else { '' } }
 $good = @{ 'good.md' = (B "# good`n") }
 
-# 1. standalone exit codes (pipes hide them)
+# --- shared: standalone exit codes (pipes hide them) ---
 $o = "$work\x2\01.json"; $r = Invoke-P01 @('-s', "$work\no_such_dir", '-o', $o)
 Check 'exit2-missing-source' $r ($r.Code -eq 2 -and $r.Out.Length -eq 0 -and -not (Test-Path $o)) 'usage error, nothing written'
 $d = New-Corpus 'empty' @{}; $o = "$work\x4\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
@@ -65,44 +67,43 @@ Check 'exit4-empty-dir' $r ($r.Code -eq 4 -and -not (Test-Path $o) -and (Art "$w
 $d = New-Corpus 'ok' $good; $o = "$work\x0\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
 Check 'exit0-ok' $r ($r.Code -eq 0 -and [Linq.Enumerable]::SequenceEqual($r.Out, [IO.File]::ReadAllBytes($o))) 'stdout == artifact'
 $d = New-Corpus 'partial' (@{ 'bad.txt' = [byte[]](0x61, 0xff) } + $good); $o = "$work\x3\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
-Check 'exit3-partial' $r ($r.Code -eq 3 -and (Art $o).errors[0].stage -eq 'decode') 'errors[0].stage decode'
+Check 'exit3-partial' $r ($r.Code -eq 3 -and (Err0 $o) -eq 'bad.txt|decode') 'errors[0] bad.txt decode'
 $o = "$work\x1\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o, '-M', '3')
 Check 'exit1-total-cap' $r ($r.Code -eq 1 -and -not (Test-Path $o)) 'nothing loaded'
 
-# 2. exclusive lock on a source file (FileShare.None): retried ~1.5 s, then errors[] stage open
+# --- shared: unreadable file (here: exclusive lock, FileShare.None; retried ~1.5 s) -> errors[] stage open ---
 $d = New-Corpus 'lock' (@{ 'locked.md' = (B "x") } + $good); $o = "$work\lock_out\01.json"
 $fs = [IO.File]::Open("$d\locked.md", 'Open', 'Read', 'None')
 try { $r = Invoke-P01 @('-s', $d, '-o', $o) } finally { $fs.Dispose() }
-Check 'source-exclusive-lock' $r ($r.Code -eq 3 -and (Art $o).errors[0].stage -eq 'open' -and $r.Ms -ge 1500) 'stage open after lock retries'
+Check 'unreadable-file' $r ($r.Code -eq 3 -and (Err0 $o) -eq 'locked.md|open') 'errors[0] locked.md open'
 
-# 3. destination held open without FILE_SHARE_DELETE: replace retried 2 s, exit 1, previous bytes kept, no tmp
-$o = "$work\dest\01.json"; New-Item -ItemType Directory -Force "$work\dest" | Out-Null; [IO.File]::WriteAllBytes($o, (B 'previous'))
-$fs = [IO.File]::Open($o, 'Open', 'Read', 'ReadWrite')
-try { $r = Invoke-P01 @('-s', (New-Corpus 'dest_src' $good), '-o', $o) } finally { $fs.Dispose() }
-Check 'locked-destination' $r ($r.Code -eq 1 -and [IO.File]::ReadAllText($o) -eq 'previous' -and (NoTmp "$work\dest")) 'previous artifact intact'
+# --- shared: unreadable directory that sorts LAST (here: ACL deny list) -> errors[] stage discover, never silence ---
+$d = New-Corpus 'lastdir' (@{ 'zz_locked\b.md' = (B "b") } + $good); $o = "$work\lastdir_out\01.json"
+icacls "$d\zz_locked" /deny "${me}:(RD)" | Out-Null
+try { $r = Invoke-P01 @('-s', $d, '-o', $o) } finally { icacls "$d\zz_locked" /remove:d "$me" | Out-Null }
+Check 'unreadable-last-dir' $r ($r.Code -eq 3 -and (Err0 $o) -eq 'zz_locked|discover') 'errors[0] zz_locked discover'
 
-# 4. junction loop is skipped as a link, never followed
+# --- shared: link loop (here: junction to its own parent) is skipped as a link, never followed ---
 $d = New-Corpus 'junction' $good; New-Item -ItemType Junction -Path "$d\loop" -Target $d | Out-Null
 $o = "$work\junction_out\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
-$sk = (Art $o).skipped; Check 'junction-loop' $r ($r.Code -eq 0 -and $sk[0].path -eq 'loop' -and $sk[0].reason -eq 'link') 'skipped link'
+$sk = (Art $o).skipped; Check 'link-loop' $r ($r.Code -eq 0 -and $sk[0].path -eq 'loop' -and $sk[0].reason -eq 'link') 'skipped link'
 [IO.Directory]::Delete("$d\loop")  # remove the link itself before any recursive cleanup
 
-# 5. 488-character path loads (\\?\ walk root)
+# --- shared: 488-character path loads (\\?\ walk root) ---
 $d = New-Corpus 'longpath' @{}; $deep = $d; while ($deep.Length -lt 430) { $deep = Join-Path $deep ('d' * 50) }
 [IO.Directory]::CreateDirectory($deep) | Out-Null; $leaf = Join-Path $deep (('f' * (487 - $deep.Length)) + '.md')
 [IO.File]::WriteAllText($leaf, "# deep`n"); $o = "$work\longpath_out\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
 Check 'long-path-488' $r ($r.Code -eq 0 -and $leaf.Length -ge 488 -and (Art $o).documents.Count -eq 1) "path chars=$($leaf.Length)"
 
-# 6. HIDDEN attribute file is skipped
-$d = New-Corpus 'hidden' (@{ 'h.md' = (B "h") } + $good); (Get-Item "$d\h.md").Attributes += 'Hidden'
-$o = "$work\hidden_out\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
-Check 'hidden-attribute' $r ($r.Code -eq 0 -and (Art $o).skipped[0].reason -eq 'hidden') 'skipped hidden'
+# --- shared: dot-file is hidden ---
+$d = New-Corpus 'dotfile' (@{ '.h.md' = (B "h") } + $good); $o = "$work\dotfile_out\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
+Check 'dot-file-hidden' $r ($r.Code -eq 0 -and (Art $o).skipped[0].reason -eq 'hidden') 'skipped hidden'
 
-# 7. reader closes stdout after 10 bytes (payload > 64 KiB): computed exit kept, artifact committed
+# --- shared: reader closes stdout after 10 bytes (payload > 64 KiB): computed exit kept, artifact committed ---
 $d = New-Corpus 'pipe' @{ 'big.txt' = (B ('x' * 200000)) }; $o = "$work\pipe_out\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o) 10
 Check 'stdout-closed-early' $r ($r.Code -eq 0 -and (Test-Path $o) -and (Get-Item $o).Length -gt 65536 -and $r.Err -notmatch 'Traceback') 'exit 0, no traceback'
 
-# 8. real Ctrl-Break during the load of a 200 MB file: exit 130, no tmp left
+# --- shared: interrupt (here: real Ctrl-Break) during the load of a 200 MB file: exit 130, no tmp ---
 $d = New-Corpus 'break' @{}; $f = [IO.File]::Create("$d\huge.txt"); $chunk = B ('y' * 1MB)
 for ($k = 0; $k -lt 200; $k++) { $f.Write($chunk, 0, $chunk.Length) }; $f.Dispose()
 $o = "$work\break_out\01.json"; $hp = "$work\break_helper.py"
@@ -120,7 +121,24 @@ sys.exit(p.wait())
 '@
 $sw = [Diagnostics.Stopwatch]::StartNew(); & $py $hp "$repo\p01_load.py" -s $d -o $o 2>&1 | Out-Null
 $r = [pscustomobject]@{ Code = $LASTEXITCODE; Err = ''; Ms = $sw.ElapsedMilliseconds }
-Check 'ctrl-break' $r ($r.Code -eq 130 -and (NoTmp "$work\break_out")) 'interrupted, no tmp'
+Check 'interrupt' $r ($r.Code -eq 130 -and (NoTmp "$work\break_out")) 'Ctrl-Break, exit 130, no tmp'
+
+# --- Windows-only: destination held open without FILE_SHARE_DELETE: replace retried 2 s, exit 1, previous kept ---
+$o = "$work\dest\01.json"; New-Item -ItemType Directory -Force "$work\dest" | Out-Null; [IO.File]::WriteAllBytes($o, (B 'previous'))
+$fs = [IO.File]::Open($o, 'Open', 'Read', 'ReadWrite')
+try { $r = Invoke-P01 @('-s', (New-Corpus 'dest_src' $good), '-o', $o) } finally { $fs.Dispose() }
+Check 'locked-destination' $r ($r.Code -eq 1 -and [IO.File]::ReadAllText($o) -eq 'previous' -and (NoTmp "$work\dest")) 'previous artifact intact'
+
+# --- Windows-only: byte-range lock (FileStream.Lock): the open succeeds, the 8 KiB sniff read fails -> stage read ---
+$d = New-Corpus 'rangelock' (@{ 'locked.md' = (B "locked text") } + $good); $o = "$work\rangelock_out\01.json"
+$fs = [IO.File]::Open("$d\locked.md", 'Open', 'ReadWrite', 'ReadWrite'); $fs.Lock(0, 4)
+try { $r = Invoke-P01 @('-s', $d, '-o', $o) } finally { $fs.Unlock(0, 4); $fs.Dispose() }
+Check 'byte-range-lock-sniff' $r ($r.Code -eq 3 -and (Err0 $o) -eq 'locked.md|read' -and (Art $o).documents.Count -eq 1) 'errors[0] locked.md read, good.md loaded'
+
+# --- Windows-only: HIDDEN attribute file is skipped ---
+$d = New-Corpus 'hidden' (@{ 'h.md' = (B "h") } + $good); (Get-Item "$d\h.md").Attributes += 'Hidden'
+$o = "$work\hidden_out\01.json"; $r = Invoke-P01 @('-s', $d, '-o', $o)
+Check 'hidden-attribute' $r ($r.Code -eq 0 -and (Art $o).skipped[0].reason -eq 'hidden') 'skipped hidden'
 
 $fail = @($results | Where-Object { -not $_.pass }).Count
 [ordered]@{ suite = 'load_negatives.ps1'; host = $env:COMPUTERNAME; cases = $results.Count; failed = $fail; work = $work } | ConvertTo-Json -Compress

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # tests/live/load_negatives.sh -- rag-p01 live negatives on Linux (Load SPEC §9). Windows twin: load_negatives.ps1
+# SHARED cases (same names in both twins): exit2-missing-source exit4-empty-dir exit0-ok exit3-partial
+#   exit1-total-cap unreadable-file unreadable-last-dir link-loop long-path-488 dot-file-hidden
+#   stdout-closed-early interrupt
+# LINUX-ONLY: fifo undecodable-name interrupt-sigterm
 # On adagio run it under WSL from the PowerShell tool, with a Linux venv:
 #   wsl -d Ubuntu-24.04 --exec bash -lc "cd /mnt/c/.../phase-rag-cli-wt-feat && UV_PROJECT_ENVIRONMENT=~/.venvs/prc ./tests/live/load_negatives.sh"
 set -uo pipefail
 
 Usage() {
     echo "Usage: ./tests/live/load_negatives.sh [-w | --work-dir PATH] [-k | --keep] [-h | --help]"
-    echo "Runs rag-p01 (venv python p01_load.py) live negatives: exit codes, chmod 000, FIFO, symlink loop,"
-    echo "488-char path, dot-file, undecodable name, 'p01 | head -c 10' (payload > 64 KiB), SIGINT and SIGTERM."
+    echo "Runs rag-p01 (venv python p01_load.py) live negatives: the shared cases above (chmod 000 file and last"
+    echo "directory, symlink loop, 'p01 | head -c 10' with a payload > 64 KiB, SIGINT) plus FIFO, undecodable name, SIGTERM."
     echo "  -w, --work-dir PATH  scratch root (default: \${TMPDIR:-/tmp}/rag-load-neg-<utc>)"
     echo "  -k, --keep           keep the scratch root"
     echo "  -h, --help           show this help"
@@ -18,12 +22,16 @@ while (($#)); do
     case "$1" in
         -h|--help) Usage; exit 0 ;;
         -k|--keep) keep=1 ;;
-        -w|--work-dir) shift; work="${1:-}" ;;
+        -w|--work-dir) shift; (($#)) || { Usage; exit 2; }; work="$1" ;;
         *) Usage; exit 2 ;;
     esac
     shift
 done
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "$repo" == /mnt/* && -z "${UV_PROJECT_ENVIRONMENT:-}" ]]; then  # WSL on a Windows checkout
+    echo "error: set UV_PROJECT_ENVIRONMENT to a Linux venv path; $repo/.venv belongs to Windows" >&2
+    exit 2
+fi
 work="${work:-${TMPDIR:-/tmp}/rag-load-neg-$(date -u +%Y%m%dT%H%M%S)}"
 mkdir -p "$work"
 py="$(uv run --project "$repo" python -c 'import sys; print(sys.executable)' | tail -n 1)"
@@ -58,8 +66,13 @@ check exit1-total-cap "$code" "$ms" "$(ok test "$code" = 1 -a ! -e "$o")" "nothi
 
 # 2. unreadable file (chmod 000; root bypasses it) -> errors[] stage open
 d="$(corpus perm)"; printf 'x' > "$d/secret.md"; chmod 000 "$d/secret.md"; o="$work/perm_out/01.json"; run -s "$d" -o "$o"
-check chmod-000 "$code" "$ms" "$(ok test "$code" = 3 -a "$(field "$o" 'd["errors"][0]["stage"]')" = open)" "uid=$(id -u)"
+check unreadable-file "$code" "$ms" "$(ok test "$code" = 3 -a "$(field "$o" 'd["errors"][0]["path"]+"|"+d["errors"][0]["stage"]')" = 'secret.md|open')" "uid=$(id -u)"
 chmod 644 "$d/secret.md"
+
+# 2b. unreadable directory that sorts LAST (chmod 000) -> errors[] stage discover, never silence
+d="$(corpus lastdir)"; mkdir "$d/zz_locked"; printf 'b' > "$d/zz_locked/b.md"; chmod 000 "$d/zz_locked"; o="$work/lastdir_out/01.json"; run -s "$d" -o "$o"
+check unreadable-last-dir "$code" "$ms" "$(ok test "$code" = 3 -a "$(field "$o" 'd["errors"][0]["path"]+"|"+d["errors"][0]["stage"]')" = 'zz_locked|discover')" "uid=$(id -u)"
+chmod 755 "$d/zz_locked"
 
 # 3. FIFO is skipped without being opened (an open would block forever)
 d="$(corpus fifo)"; mkfifo "$d/pipe.md"; o="$work/fifo_out/01.json"; run -s "$d" -o "$o"
@@ -67,7 +80,7 @@ check fifo "$code" "$ms" "$(ok test "$code" = 0 -a "$(field "$o" 'd["skipped"][0
 
 # 4. symlink loop is skipped as a link, never followed
 d="$(corpus symloop)"; ln -s "$d" "$d/loop"; o="$work/symloop_out/01.json"; run -s "$d" -o "$o"
-check symlink-loop "$code" "$ms" "$(ok test "$code" = 0 -a "$(field "$o" 'd["skipped"][0]["reason"]')" = link)" "skipped link"
+check link-loop "$code" "$ms" "$(ok test "$code" = 0 -a "$(field "$o" 'd["skipped"][0]["reason"]')" = link)" "skipped link"
 
 # 5. 488-character path loads
 d="$work/longpath"; deep="$d"; while ((${#deep} < 430)); do deep="$deep/$(printf 'd%.0s' {1..50})"; done
@@ -93,7 +106,7 @@ for sig in INT TERM; do
     p01 -s "$d" -o "$o" > /dev/null 2> "$work/err.txt" & pid=$!
     for _ in $(seq 1 300); do grep -q 'load start' "$work/err.txt" && break; sleep 0.05; done
     sleep 0.3; kill -s "$sig" "$pid"; wait "$pid"; code=$?; ms=$(( $(date +%s%3N) - t0 ))
-    check "sig$sig" "$code" "$ms" "$(ok test "$code" = 130 -a -z "$(find "$work/sig_$sig" -name '.*.tmp' 2>/dev/null)")" "interrupted, no tmp"
+    check "$([[ $sig == INT ]] && echo interrupt || echo interrupt-sigterm)" "$code" "$ms" "$(ok test "$code" = 130 -a -z "$(find "$work/sig_$sig" -name '.*.tmp' 2>/dev/null)")" "interrupted, no tmp"
 done
 set +m
 

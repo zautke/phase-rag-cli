@@ -182,9 +182,15 @@ class Battery:
         self.banner("STAGE 1: ISOLATED PHASES 01 -> 10 + NEGATIVES")
         ph = self.phase
         ph("rag-p01", "01", ["rag-p01", "-o", a("01_loaded.json")], a("01_loaded.json"), "Phase01LoadedOutput")
-        # pipes hide exit codes: assert p01's own usage exit standalone (a typo'd --source-dir is exit 2, never the demo)
-        self.negative("NEG rag-p01 missing --source-dir", "neg_source",
-                      ["rag-p01", "-s", a("no_such_dir"), "-o", a("_neg.json")], "exist")
+        # pipes hide exit codes: assert p01's own exit standalone. A typo'd --source-dir is a usage error
+        # (exit 2, never the demo corpus): asserted on the exit code and on nothing written, not on wrapped text.
+        neg = ART / "_neg_p01.json"
+        self.run("NEG rag-p01 missing --source-dir", "neg_source",
+                 ["rag-p01", "-s", a("no_such_dir"), "-o", str(neg)], expect=2)
+        self.check(not (ART / "stdout_neg_source.json").read_bytes(), "NEG rag-p01: stdout not empty")
+        self.check(not neg.exists() and not neg.with_name("_neg_p01.report.json").exists(),
+                   "NEG rag-p01: artifact or report written on a usage error")
+        self.say("  [OK] NEG rag-p01 missing --source-dir: exit 2, stdout empty, no artifact, no report")
         ph("rag-p02", "02", ["rag-p02", "-i", a("01_loaded.json"), "-o", a("02_markdown.json")],
            a("02_markdown.json"), "Phase02MarkdownOutput")
         ph("rag-p03", "03", ["rag-p03", "-i", a("02_markdown.json"), "-o", a("03_parsed.json")],
