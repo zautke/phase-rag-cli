@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # p08_rerank.py
+import html
 import textwrap
 from pathlib import Path
 from typing import Annotated
@@ -69,7 +70,8 @@ def assemble_xml_context(selected: list[RerankedContextItem], reorder_litm: bool
     parts = ["<retrieved_context>"]
     for item in ordered:
         parts.append(
-            f'  <document id="{item.doc_id}" chunk_id="{item.chunk_id}" rank="{rank[id(item)]}" '
+            f'  <document id="{html.escape(item.doc_id)}" chunk_id="{html.escape(item.chunk_id)}" '
+            f'rank="{rank[id(item)]}" '
             f'rerank_score="{item.cross_encoder_score:.4f}">\n'
             f"{textwrap.indent(item.expanded_parent_context, '    ')}\n"
             f"  </document>"

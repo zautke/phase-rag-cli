@@ -100,3 +100,18 @@ def test_p08_cli_to_p10_ndcg_is_one_with_mocked_scorer(
     p08 = rc.Phase08RerankedOutput.model_validate_json(out.read_text(encoding="utf-8"))
     assert [c.chunk_id for c in p08.top_contexts] == ["c1", "c3", "c2", "c0"]
     assert p10_evaluate.compute_ndcg_at_k(p08.xml_context_block) == 1.0
+
+
+def test_p08_escapes_doc_and_chunk_ids_so_p10_parses_every_rank() -> None:
+    """doc_id is a relative path now: quotes, & and angle brackets must not break the attributes."""
+    import html
+
+    odd = 'a"&<>b.md'
+    ctx = [rc.RerankedContextItem(chunk_id=f"{odd}_sec_0_chk_{i}", doc_id=odd, cross_encoder_score=s,
+                                  expanded_parent_context=f"body {i}") for i, s in enumerate([0.2, 0.8, 0.5])]
+    xml = p08_rerank.assemble_xml_context(ctx, reorder_litm=True)
+    assert len(p10_evaluate.DOCUMENT_TAG.findall(xml)) == 3
+    plain = p08_rerank.assemble_xml_context(items([0.2, 0.8, 0.5]), reorder_litm=True)
+    assert p10_evaluate.compute_ndcg_at_k(xml) == p10_evaluate.compute_ndcg_at_k(plain) < 1.0
+    ids = re.findall(r'<document id="([^"]*)" chunk_id="([^"]*)"', xml)
+    assert {html.unescape(d) for d, _ in ids} == {odd} and html.unescape(ids[0][1]).startswith(odd)
