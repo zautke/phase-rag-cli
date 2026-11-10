@@ -152,3 +152,95 @@ def test_atomic_write_sweeps_stale_tmp_only(tmp_path: Path) -> None:
     os.utime(stale, (old, old))
     rc.atomic_write_bytes(tmp_path / "a.json", b"x")
     assert not stale.exists() and fresh.exists()
+
+
+# --- fix round 1: commit point (review A I2 / B I2), upstream cap (review B I3) ---------------------
+class _ClosedStdout:
+    """sys.stdout stand-in whose binary write fails the way a closed pipe does."""
+
+    def __init__(self, err: OSError) -> None:
+        self.err = err
+        self.buffer = self
+
+    def write(self, data: bytes) -> int:
+        raise self.err
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("err", [BrokenPipeError(errno.EPIPE, "Broken pipe"), OSError(errno.EINVAL, "Invalid argument")])
+def test_emit_raises_stdout_closed_only_after_the_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, err: OSError
+) -> None:
+    monkeypatch.setattr(rc.sys, "stdout", _ClosedStdout(err))
+    cli = rc.PhaseCLI("t", rc.Phase01LoadedOutput, rc.Phase02MarkdownOutput, "x")
+    out = tmp_path / "02.json"
+    with pytest.raises(rc.StdoutClosed) as ei:
+        cli.emit(_p02_payload(), out, quiet=True)
+    assert ei.value.data == out.read_bytes() == rc.payload_bytes(_p02_payload())
+
+
+def test_emit_einval_before_the_commit_is_not_stdout_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def einval(fd: int) -> None:
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.setattr(rc.os, "fsync", einval)
+    _fake_stdout(monkeypatch)
+    out = tmp_path / "02.json"
+    out.write_bytes(b"previous")
+    with pytest.raises(OSError) as ei:
+        rc.PhaseCLI("t", rc.Phase01LoadedOutput, rc.Phase02MarkdownOutput, "x").emit(_p02_payload(), out, quiet=True)
+    assert not isinstance(ei.value, rc.StdoutClosed) and out.read_bytes() == b"previous"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the directory fsync runs on POSIX only")
+def test_directory_fsync_failure_after_replace_is_best_effort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = os.fsync
+
+    def dir_fsync_fails(fd: int) -> None:
+        if os.path.isdir(f"/proc/self/fd/{fd}"):
+            raise OSError(errno.EINVAL, "Invalid argument")
+        real(fd)
+
+    monkeypatch.setattr(rc.os, "fsync", dir_fsync_fails)
+    rc.atomic_write_bytes(tmp_path / "a.json", b"new")
+    assert (tmp_path / "a.json").read_bytes() == b"new"
+
+
+def test_load_upstream_refuses_an_oversized_in_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import typer
+
+    f = tmp_path / "02.json"
+    f.write_bytes(rc.payload_bytes(_p02_payload()))
+    monkeypatch.setattr(rc, "MAX_UPSTREAM_BYTES", 100)
+    with pytest.raises(typer.BadParameter, match="MAX_UPSTREAM_BYTES"):
+        rc.PhaseCLI("t", rc.Phase02MarkdownOutput, rc.Phase03ParsedOutput, "x").load_upstream(f)
+
+
+def test_load_upstream_reads_stdin_in_bounded_chunks_and_refuses_oversize(monkeypatch: pytest.MonkeyPatch) -> None:
+    import typer
+
+    data = rc.payload_bytes(_p02_payload())
+    asked: list[int] = []
+
+    class Buf(io.BytesIO):
+        def read(self, n: int | None = -1) -> bytes:
+            asked.append(n)
+            return super().read(n)
+
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.buffer = Buf(data)
+
+        def isatty(self) -> bool:
+            return False
+
+    cli = rc.PhaseCLI("t", rc.Phase02MarkdownOutput, rc.Phase03ParsedOutput, "x")
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    assert cli.load_upstream(None) == _p02_payload()
+    assert asked and all(0 < n <= rc.UPSTREAM_CHUNK for n in asked)  # never read(-1), never read(cap + 1)
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    monkeypatch.setattr(rc, "MAX_UPSTREAM_BYTES", 100)
+    with pytest.raises(typer.BadParameter, match="MAX_UPSTREAM_BYTES"):
+        cli.load_upstream(None)

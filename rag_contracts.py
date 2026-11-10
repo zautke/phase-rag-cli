@@ -20,6 +20,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 
+import loaders.filesystem as _load_fs  # module import: rag_contracts must not hold a DEFAULT_LOAD_* (SSoT)
+
 
 def ensure_utf8_streams() -> None:
     """Reconfigure sys.stdin, sys.stdout, and sys.stderr to use utf-8 on Windows and POSIX."""
@@ -51,6 +53,19 @@ class ExitCode(IntEnum):
 
 REPLACE_RETRY_S = 2.0  # os.replace retry budget for a destination locked by a reader (Windows)
 STALE_TMP_S = 3600  # leftover .<name>.*.tmp older than this is swept on the next write
+# Largest upstream JSON a phase accepts. p01 caps supported input at DEFAULT_LOAD_MAX_TOTAL_BYTES; JSON
+# escaping grows a byte to at most 6 (a C0 control char -> \u00XX), so every artifact p01 can emit at
+# the default cap fits. Measured: real corpus 1.025x, CRLF/tab-heavy text <= 2x.
+MAX_UPSTREAM_BYTES = 6 * _load_fs.DEFAULT_LOAD_MAX_TOTAL_BYTES
+UPSTREAM_CHUNK = 2**20  # stdin is read in chunks: read(n) pre-allocates n bytes
+
+
+class StdoutClosed(OSError):
+    """The reader closed stdout AFTER the artifact was committed; carries the bytes that were written."""
+
+    def __init__(self, data: bytes) -> None:
+        super().__init__(errno.EPIPE, "stdout closed by the reader after the artifact was committed")
+        self.data = data
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -80,12 +95,13 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
                 if time.monotonic() >= deadline:
                     raise PermissionError(e.errno, f"destination locked, gave up after {REPLACE_RETRY_S}s: {path}") from e
                 time.sleep(0.05)
-        if os.name != "nt":
-            dfd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+        if os.name != "nt":  # committed already: the directory fsync is best effort, never a failure
+            with contextlib.suppress(OSError):
+                dfd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
     except OSError as e:
         if e.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)):
             raise OSError(e.errno, f"disk full while writing {path}") from e
@@ -338,16 +354,21 @@ class PhaseCLI(Generic[T_In, T_Out]):
         if self.input_model is None:
             raise RuntimeError("Phase 01 has no upstream phase.")
         # Bytes end to end: a decoded str of the upstream payload costs up to 4x its size.
-        raw = b""
+        raw: bytes | bytearray = b""
         if in_file is not None:
             if not in_file.is_file():
                 raise typer.BadParameter(f"--in-file not found: {in_file}")
-            raw = in_file.read_bytes()
+            raw = self._read_capped_file(in_file)
         else:
             if not sys.stdin.isatty():
-                raw = sys.stdin.buffer.read()
+                raw = bytearray()
+                while chunk := sys.stdin.buffer.read(UPSTREAM_CHUNK):
+                    raw += chunk
+                    if len(raw) > MAX_UPSTREAM_BYTES:
+                        raise typer.BadParameter(f"[{self.phase_title}] stdin exceeds MAX_UPSTREAM_BYTES "
+                                                 f"({MAX_UPSTREAM_BYTES} bytes)")
             if (not raw or raw.isspace()) and default_file is not None and default_file.is_file():
-                raw = default_file.read_bytes()
+                raw = self._read_capped_file(default_file)
         if raw.startswith(b"\xef\xbb\xbf"):  # PowerShell pipes prepend a UTF-8 BOM
             raw = raw[3:]
         if not raw or raw.isspace():
@@ -357,6 +378,12 @@ class PhaseCLI(Generic[T_In, T_Out]):
             )
         # Strict runtime type verification of previous phase's output
         return self.input_model.model_validate_json(raw)
+
+    def _read_capped_file(self, path: Path) -> bytes:
+        if (size := path.stat().st_size) > MAX_UPSTREAM_BYTES:
+            raise typer.BadParameter(f"[{self.phase_title}] {path} is {size} bytes > MAX_UPSTREAM_BYTES "
+                                     f"({MAX_UPSTREAM_BYTES} bytes)")
+        return path.read_bytes()
 
     def emit(self, payload: T_Out, out_file: Path, quiet: bool = False) -> bytes:
         """Serialize once; artifact (atomic) -> stderr panel -> stdout. Returns the bytes written."""
@@ -383,8 +410,13 @@ class PhaseCLI(Generic[T_In, T_Out]):
                 )
             )
 
-        # 3. Stream pure JSON to stdout for the next CLI phase
-        sys.stdout.flush()
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        # 3. Stream pure JSON to stdout for the next CLI phase (after the commit point: the artifact exists)
+        try:
+            sys.stdout.flush()
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        except OSError as e:  # Windows reports a closed pipe as EINVAL
+            if isinstance(e, BrokenPipeError) or e.errno in (errno.EPIPE, errno.EINVAL):
+                raise StdoutClosed(data) from e
+            raise
         return data
