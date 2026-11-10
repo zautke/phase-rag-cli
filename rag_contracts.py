@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
+import os
 import sys
+import tempfile
+import time
 from datetime import UTC, datetime
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, Generic, Literal, TypeVar
 
@@ -31,6 +36,63 @@ CragVerdict = Literal["GROUNDED", "REWRITE_REQUIRED"]
 
 # Console strictly targets stderr so stdout remains a pure JSON pipe
 err_console = Console(stderr=True)
+
+
+class ExitCode(IntEnum):
+    """Shared phase exit codes (pipes hide them: assert a phase's code standalone)."""
+
+    OK = 0
+    FATAL = 1  # unexpected error, artifact write failure, cap breach, --strict error
+    USAGE = 2  # bad option / env / path
+    PARTIAL = 3  # >= 1 error and >= 1 result
+    EMPTY = 4  # 0 results
+    INTERRUPTED = 130  # Ctrl-C / SIGBREAK / SIGTERM
+
+
+REPLACE_RETRY_S = 2.0  # os.replace retry budget for a destination locked by a reader (Windows)
+STALE_TMP_S = 3600  # leftover .<name>.*.tmp older than this is swept on the next write
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write `data` to `path` via a same-directory temp file + fsync + os.replace.
+    A crash or ENOSPC leaves the previous file byte-identical and no temp file behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for old in path.parent.glob(f".{path.name}.*.tmp"):
+        with contextlib.suppress(OSError):
+            if now - old.stat().st_mtime > STALE_TMP_S:
+                old.unlink()
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp creates 0600; artifacts are shared files
+        deadline = time.monotonic() + REPLACE_RETRY_S
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError as e:  # Windows: a reader holds the destination open
+                if time.monotonic() >= deadline:
+                    raise PermissionError(e.errno, f"destination locked, gave up after {REPLACE_RETRY_S}s: {path}") from e
+                time.sleep(0.05)
+        if os.name != "nt":
+            dfd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+    except OSError as e:
+        if e.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)):
+            raise OSError(e.errno, f"disk full while writing {path}") from e
+        raise
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
 
 
 class BasePhasePayload(BaseModel):
@@ -210,8 +272,9 @@ class PhaseCRAGLoopOutput(BasePhasePayload):
 
 
 def payload_bytes(model: BaseModel) -> bytes:
-    """Canonical wire form: UTF-8, no BOM, LF only, exactly one trailing newline."""
-    return (model.model_dump_json(indent=2) + "\n").encode("utf-8")
+    """Canonical wire form: UTF-8, no BOM, LF only, exactly one trailing newline.
+    Serialized straight to bytes: no intermediate str (a str with one astral char is 4 B/char)."""
+    return model.__pydantic_serializer__.to_json(model, indent=2) + b"\n"
 
 
 # --- GENERIC TYPE-AWARE TRI-PLEX CLI ENGINE ---
@@ -244,43 +307,43 @@ class PhaseCLI(Generic[T_In, T_Out]):
         ensure_utf8_streams()
         if self.input_model is None:
             raise RuntimeError("Phase 01 has no upstream phase.")
-        raw_json = ""
+        # Bytes end to end: a decoded str of the upstream payload costs up to 4x its size.
+        raw = b""
         if in_file is not None:
             if not in_file.is_file():
                 raise typer.BadParameter(f"--in-file not found: {in_file}")
-            raw_json = in_file.read_text(encoding="utf-8-sig")
+            raw = in_file.read_bytes()
         else:
             if not sys.stdin.isatty():
-                raw_json = sys.stdin.read()
-            if not raw_json.strip() and default_file is not None and default_file.is_file():
-                raw_json = default_file.read_text(encoding="utf-8-sig")
-        raw_json = raw_json.lstrip("\ufeff").strip()
-        if not raw_json:
+                raw = sys.stdin.buffer.read()
+            if (not raw or raw.isspace()) and default_file is not None and default_file.is_file():
+                raw = default_file.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):  # PowerShell pipes prepend a UTF-8 BOM
+            raw = raw[3:]
+        if not raw or raw.isspace():
             hint = f", or default {default_file}" if default_file is not None else ""
             raise typer.BadParameter(
                 f"[{self.phase_title}] Expected upstream JSON via stdin pipe or --in-file{hint}"
             )
         # Strict runtime type verification of previous phase's output
-        return self.input_model.model_validate_json(raw_json)
+        return self.input_model.model_validate_json(raw)
 
-    def emit(self, payload: T_Out, out_file: Path, quiet: bool = False) -> None:
+    def emit(self, payload: T_Out, out_file: Path, quiet: bool = False) -> bytes:
+        """Serialize once; artifact (atomic) -> stderr panel -> stdout. Returns the bytes written."""
         ensure_utf8_streams()
-        # Re-validate output contract before emitting
-        validated = self.output_model.model_validate(payload.model_dump())
-        json_str = validated.model_dump_json(indent=2)
-        data = payload_bytes(validated)
+        if type(payload) is not self.output_model:  # strict construction already validated it
+            raise TypeError(f"{self.phase_title}: emit got {type(payload).__name__}, "
+                            f"expected {self.output_model.__name__}")
+        data = payload_bytes(payload)
 
         # 1. Persist to file (binary: no newline translation on Windows)
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_bytes(data)
+        atomic_write_bytes(out_file, data)
 
         # 2. Dump human-readable telemetry to console (stderr so pipes stay clean)
         if not quiet:
-            preview = (
-                json_str
-                if len(json_str) < 900
-                else json_str[:900] + "\n  ... [truncated in console preview]"
-            )
+            preview = data[:900].decode("utf-8", "replace")
+            if len(data) > 900:
+                preview += "\n  ... [truncated in console preview]"
             err_console.print(
                 Panel(
                     Syntax(preview, "json", theme="monokai", word_wrap=True),
@@ -291,5 +354,7 @@ class PhaseCLI(Generic[T_In, T_Out]):
             )
 
         # 3. Stream pure JSON to stdout for the next CLI phase
-        sys.stdout.buffer.write(data)
         sys.stdout.flush()
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+        return data
