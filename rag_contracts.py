@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
+import os
 import sys
+import tempfile
+import time
 from datetime import UTC, datetime
+from enum import IntEnum
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 import typer
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
+
+import loaders.filesystem as _load_fs  # module import: rag_contracts must not hold a DEFAULT_LOAD_* (SSoT)
 
 
 def ensure_utf8_streams() -> None:
@@ -25,8 +32,83 @@ def ensure_utf8_streams() -> None:
                 stream.reconfigure(encoding="utf-8")
 
 
+# One CRAG threshold default for P09 and P00 (mirrored in .env.example as RAG_CRAG_THRESHOLD)
+DEFAULT_CRAG_THRESHOLD = 0.65
+CragVerdict = Literal["GROUNDED", "REWRITE_REQUIRED"]
+
 # Console strictly targets stderr so stdout remains a pure JSON pipe
 err_console = Console(stderr=True)
+
+
+class ExitCode(IntEnum):
+    """Shared phase exit codes (pipes hide them: assert a phase's code standalone)."""
+
+    OK = 0
+    FATAL = 1  # unexpected error, artifact write failure, cap breach, --strict error
+    USAGE = 2  # bad option / env / path
+    PARTIAL = 3  # >= 1 error and >= 1 result
+    EMPTY = 4  # 0 results
+    INTERRUPTED = 130  # Ctrl-C / SIGBREAK / SIGTERM
+
+
+REPLACE_RETRY_S = 2.0  # os.replace retry budget for a destination locked by a reader (Windows)
+STALE_TMP_S = 3600  # leftover .<name>.*.tmp older than this is swept on the next write
+# Largest upstream JSON a phase accepts. p01 caps supported input at DEFAULT_LOAD_MAX_TOTAL_BYTES; JSON
+# escaping grows a byte to at most 6 (a C0 control char -> \u00XX), so every artifact p01 can emit at
+# the default cap fits. Measured: real corpus 1.025x, CRLF/tab-heavy text <= 2x.
+MAX_UPSTREAM_BYTES = 6 * _load_fs.DEFAULT_LOAD_MAX_TOTAL_BYTES
+UPSTREAM_CHUNK = 2**20  # stdin is read in chunks: read(n) pre-allocates n bytes
+
+
+class StdoutClosed(OSError):
+    """The reader closed stdout AFTER the artifact was committed; carries the bytes that were written."""
+
+    def __init__(self, data: bytes) -> None:
+        super().__init__(errno.EPIPE, "stdout closed by the reader after the artifact was committed")
+        self.data = data
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write `data` to `path` via a same-directory temp file + fsync + os.replace.
+    A crash or ENOSPC leaves the previous file byte-identical and no temp file behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for old in path.parent.glob(f".{path.name}.*.tmp"):
+        with contextlib.suppress(OSError):
+            if now - old.stat().st_mtime > STALE_TMP_S:
+                old.unlink()
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp creates 0600; artifacts are shared files
+        deadline = time.monotonic() + REPLACE_RETRY_S
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError as e:  # Windows: a reader holds the destination open
+                if time.monotonic() >= deadline:
+                    raise PermissionError(e.errno, f"destination locked, gave up after {REPLACE_RETRY_S}s: {path}") from e
+                time.sleep(0.05)
+        if os.name != "nt":  # committed already: the directory fsync is best effort, never a failure
+            with contextlib.suppress(OSError):
+                dfd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+    except OSError as e:
+        if e.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)):
+            raise OSError(e.errno, f"disk full while writing {path}") from e
+        raise
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
 
 
 class BasePhasePayload(BaseModel):
@@ -41,15 +123,45 @@ class BasePhasePayload(BaseModel):
 # --- INGESTION SCHEMAS (Phases 1 - 5) ---
 class RawDocument(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
-    doc_id: str
+    doc_id: str  # POSIX path relative to the source root (single file: its name)
     source_uri: str
     mime_type: str
-    raw_content: str
+    raw_content: str  # byte-faithful decode: line endings kept, BOM stripped (see `bom`)
+    sha256: str  # over the raw bytes, BOM included
+    size_bytes: int
+    encoding: str
+    bom: str | None
+    newline_style: Literal["lf", "crlf", "cr", "mixed", "none"]
+    loader: str
+    mime_source: Literal["signature", "extension", "content", "default"]
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class LoadError(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    path: str
+    stage: Literal["discover", "open", "read", "decode", "limit", "unstable"]
+    exc_type: str
+    message: str
+    bytes_read: int
+    errno: int | None = None
+    offset: int | None = None
+
+
+class LoadSkip(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    path: str
+    reason: str
+    size_bytes: int
+    detail: str | None = None
 
 
 class Phase01LoadedOutput(BasePhasePayload):
     phase_name: str = "01_loading"
     documents: list[RawDocument]
+    errors: list[LoadError] = Field(default_factory=list)
+    skipped: list[LoadSkip] = Field(default_factory=list)
+    corpus_origin: Literal["directory", "file", "builtin_demo"]
 
 
 class MarkdownDocument(BaseModel):
@@ -93,6 +205,7 @@ class DocumentChunk(BaseModel):
 class Phase04ChunkedOutput(BasePhasePayload):
     phase_name: str = "04_chunking"
     chunks: list[DocumentChunk]
+    chunk_strategy: str = "sliding_window"
 
 
 class EnrichedIndexedChunk(BaseModel):
@@ -110,6 +223,9 @@ class EnrichedIndexedChunk(BaseModel):
 class Phase05IndexedOutput(BasePhasePayload):
     phase_name: str = "05_contextual_index"
     qdrant_collection: str
+    dense_backend: str
+    dense_model: str
+    sparse_model: str
     indexed_records: list[EnrichedIndexedChunk]
 
 
@@ -121,7 +237,10 @@ class Phase06QueryPlanOutput(BasePhasePayload):
     sub_queries: list[str]
     hyde_passage: str
     metadata_filters: dict[str, Any]
-    index_snapshot: Phase05IndexedOutput
+    qdrant_collection: str
+    dense_backend: str
+    dense_model: str
+    sparse_model: str
 
 
 class RetrievedCandidate(BaseModel):
@@ -159,7 +278,7 @@ class Phase08RerankedOutput(BasePhasePayload):
 class Phase09GenerationOutput(BasePhasePayload):
     phase_name: str = "09_crag_generation"
     original_query: str
-    crag_verdict: str                  # "GROUNDED" | "AMBIGUOUS" | "REWRITE_REQUIRED"
+    crag_verdict: CragVerdict
     grounded_confidence: float
     synthesized_answer: str
     citations: list[str]
@@ -168,7 +287,6 @@ class Phase09GenerationOutput(BasePhasePayload):
 
 class Phase10EvalOutput(BasePhasePayload):
     phase_name: str = "10_telemetry_eval"
-    run_id: str
     ndcg_at_k: float
     context_precision: float
     faithfulness_score: float
@@ -182,7 +300,7 @@ class CRAGAttemptRecord(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     attempt: int
     query_used: str
-    crag_verdict: str
+    crag_verdict: CragVerdict
     grounded_confidence: float
     top_chunk_ids: list[str]
     rewrite_reason: str | None = None
@@ -197,6 +315,12 @@ class PhaseCRAGLoopOutput(BasePhasePayload):
     attempts_history: list[CRAGAttemptRecord]
     final_generation: Phase09GenerationOutput
     final_evaluation: Phase10EvalOutput
+
+
+def payload_bytes(model: BaseModel) -> bytes:
+    """Canonical wire form: UTF-8, no BOM, LF only, exactly one trailing newline.
+    Serialized straight to bytes: no intermediate str (a str with one astral char is 4 B/char)."""
+    return model.__pydantic_serializer__.to_json(model, indent=2) + b"\n"
 
 
 # --- GENERIC TYPE-AWARE TRI-PLEX CLI ENGINE ---
@@ -224,40 +348,59 @@ class PhaseCLI(Generic[T_In, T_Out]):
         self.output_model = output_model
         self.default_out_path = default_out_path
 
-    def load_upstream(self, in_file: Path | None) -> T_In:
+    def load_upstream(self, in_file: Path | None, default_file: Path | None = None) -> T_In:
+        """Upstream JSON from --in-file, else stdin (read once), else default_file if given."""
         ensure_utf8_streams()
         if self.input_model is None:
             raise RuntimeError("Phase 01 has no upstream phase.")
-        raw_json: str
-        if in_file and in_file.exists():
-            raw_json = in_file.read_text(encoding="utf-8-sig")
-        elif not sys.stdin.isatty():
-            raw_json = sys.stdin.read()
+        # Bytes end to end: a decoded str of the upstream payload costs up to 4x its size.
+        raw: bytes | bytearray = b""
+        if in_file is not None:
+            if not in_file.is_file():
+                raise typer.BadParameter(f"--in-file not found: {in_file}")
+            raw = self._read_capped_file(in_file)
         else:
+            if not sys.stdin.isatty():
+                raw = bytearray()
+                while chunk := sys.stdin.buffer.read(UPSTREAM_CHUNK):
+                    raw += chunk
+                    if len(raw) > MAX_UPSTREAM_BYTES:
+                        raise typer.BadParameter(f"[{self.phase_title}] stdin exceeds MAX_UPSTREAM_BYTES "
+                                                 f"({MAX_UPSTREAM_BYTES} bytes)")
+            if (not raw or raw.isspace()) and default_file is not None and default_file.is_file():
+                raw = self._read_capped_file(default_file)
+        if raw.startswith(b"\xef\xbb\xbf"):  # PowerShell pipes prepend a UTF-8 BOM
+            raw = raw[3:]
+        if not raw or raw.isspace():
+            hint = f", or default {default_file}" if default_file is not None else ""
             raise typer.BadParameter(
-                f"[{self.phase_title}] Expected upstream JSON via stdin pipe or --in-file"
+                f"[{self.phase_title}] Expected upstream JSON via stdin pipe or --in-file{hint}"
             )
-        raw_json = raw_json.lstrip("\ufeff").strip()
         # Strict runtime type verification of previous phase's output
-        return self.input_model.model_validate_json(raw_json)
+        return self.input_model.model_validate_json(raw)
 
-    def emit(self, payload: T_Out, out_file: Path, quiet: bool = False) -> None:
+    def _read_capped_file(self, path: Path) -> bytes:
+        if (size := path.stat().st_size) > MAX_UPSTREAM_BYTES:
+            raise typer.BadParameter(f"[{self.phase_title}] {path} is {size} bytes > MAX_UPSTREAM_BYTES "
+                                     f"({MAX_UPSTREAM_BYTES} bytes)")
+        return path.read_bytes()
+
+    def emit(self, payload: T_Out, out_file: Path, quiet: bool = False) -> bytes:
+        """Serialize once; artifact (atomic) -> stderr panel -> stdout. Returns the bytes written."""
         ensure_utf8_streams()
-        # Re-validate output contract before emitting
-        validated = self.output_model.model_validate(payload.model_dump())
-        json_str = validated.model_dump_json(indent=2)
+        if type(payload) is not self.output_model:  # strict construction already validated it
+            raise TypeError(f"{self.phase_title}: emit got {type(payload).__name__}, "
+                            f"expected {self.output_model.__name__}")
+        data = payload_bytes(payload)
 
-        # 1. Persist to file
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(json_str, encoding="utf-8")
+        # 1. Persist to file (binary: no newline translation on Windows)
+        atomic_write_bytes(out_file, data)
 
         # 2. Dump human-readable telemetry to console (stderr so pipes stay clean)
         if not quiet:
-            preview = (
-                json_str
-                if len(json_str) < 900
-                else json_str[:900] + "\n  ... [truncated in console preview]"
-            )
+            preview = data[:900].decode("utf-8", "replace")
+            if len(data) > 900:
+                preview += "\n  ... [truncated in console preview]"
             err_console.print(
                 Panel(
                     Syntax(preview, "json", theme="monokai", word_wrap=True),
@@ -267,6 +410,13 @@ class PhaseCLI(Generic[T_In, T_Out]):
                 )
             )
 
-        # 3. Stream pure JSON to stdout for the next CLI phase
-        sys.stdout.write(json_str + "\n")
-        sys.stdout.flush()
+        # 3. Stream pure JSON to stdout for the next CLI phase (after the commit point: the artifact exists)
+        try:
+            sys.stdout.flush()
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        except OSError as e:  # Windows reports a closed pipe as EINVAL
+            if isinstance(e, BrokenPipeError) or e.errno in (errno.EPIPE, errno.EINVAL):
+                raise StdoutClosed(data) from e
+            raise
+        return data

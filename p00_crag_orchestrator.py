@@ -12,6 +12,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from rag_contracts import (
+    DEFAULT_CRAG_THRESHOLD,
     CRAGAttemptRecord,
     Phase05IndexedOutput,
     Phase06QueryPlanOutput,
@@ -22,6 +23,7 @@ from rag_contracts import (
     PhaseCLI,
     PhaseCRAGLoopOutput,
     err_console,
+    payload_bytes,
 )
 
 app = typer.Typer(add_completion=False)
@@ -37,11 +39,17 @@ def Usage() -> str:
     return (
         "Usage: rag-p00 [--query / -q TEXT] [--in-file / -i PATH] [--out-file / -o PATH] "
         "[--qdrant-url / -u URL] [--qdrant-path / -p PATH] [--rerank-backend / -b BACKEND] "
-        "[--rerank-model / -m MODEL] [--crag-threshold / -t FLOAT] [--max-retries / -r INT] "
+        "[--rerank-model / -m MODEL] [--prefetch-limit / -l INT] [--rrf-k / -k INT] [--top-k / -K INT] "
+        "[--top-n / -n INT] [--batch-size / -B INT] [--crag-threshold / -t FLOAT] [--max-retries / -r INT] "
         "[--quiet-children / -c] [--quiet / -s]\n"
         "Orchestrates autonomous CRAG query-rewrite loops across Phases 06 -> 09 and final evaluation in Phase 10.\n"
         "Input precedence: (1) explicit --in-file if provided; (2) stdin if piped; (3) default artifacts/05_indexed.json."
     )
+
+
+def forward(**opts: object) -> list[str]:
+    """`--kebab-name value` args for the options that are set; None is left to the child's own default/env."""
+    return [x for k, v in opts.items() if v is not None for x in ("--" + k.replace("_", "-"), str(v))]
 
 
 def invoke_cli_phase(
@@ -49,7 +57,7 @@ def invoke_cli_phase(
 ) -> str:
     """
     Spawns an isolated CLI phase subprocess, pipes validated JSON to its stdin,
-    allows child stderr telemetry to pass straight to the terminal, and captures stdout JSON.
+    lets child stderr telemetry pass straight to the terminal, and captures stdout JSON.
     """
     script_dir = Path(__file__).resolve().parent
     target_script = (
@@ -62,23 +70,17 @@ def invoke_cli_phase(
     if quiet_child:
         cmd.append("--quiet")
 
+    # stderr is inherited: child Rich telemetry reaches the terminal live; only stdout JSON is captured
     proc = subprocess.run(
         cmd,
         input=input_json,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         check=False,
     )
-    # Forward child's Rich stderr panels directly to our stderr console
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
-        sys.stderr.flush()
-
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"Subprocess {script} failed (exit {proc.returncode}):\n{proc.stderr}"
-        )
+        raise RuntimeError(f"Subprocess {script} failed (exit {proc.returncode}); see its stderr above")
     return proc.stdout.strip()
 
 
@@ -88,10 +90,11 @@ def synthesize_rewritten_query(
     attempt: int,
     p08_out: Phase08RerankedOutput,
     seen_terms: set[str],
-) -> tuple[str, str]:
+) -> tuple[str, str] | None:
     """
     Diagnoses why the cross-encoder confidence fell below the CRAG threshold and
     synthesizes an expanded, disambiguated query for the next P06 -> P09 iteration.
+    Returns None when the retrieved context has no new anchor terms (retrying cannot help).
     """
     # Extract high-signal domain terms from the partial retrieved context that weren't in the query
     stop_words = {
@@ -115,27 +118,25 @@ def synthesize_rewritten_query(
         "document",
         "retrieved_context",
     }
-    context_tokens: list[str] = []
-    for item in p08_out.top_contexts:
-        for raw_tok in item.expanded_parent_context.replace("\n", " ").split():
-            clean = raw_tok.strip(".,;:()[]{}<>\"'#*").lower()
-            if (
-                len(clean) >= 4
-                and clean not in stop_words
-                and clean not in seen_terms
-                and clean not in current_query.lower()
-            ):
-                context_tokens.append(clean)
-                seen_terms.add(clean)
-
-    # Pick top diagnostic anchor terms discovered in the corpus
-    anchor_terms = context_tokens[:4]
-    if attempt == 1:
-        expansion = (
-            " ".join(anchor_terms)
-            if anchor_terms
-            else "Qdrant HNSW dense SPLADE sparse Reciprocal Rank Fusion CRAG"
+    query_lower = current_query.lower()
+    candidates = (
+        raw_tok.strip(".,;:()[]{}<>\"'#*").lower()
+        for item in p08_out.top_contexts
+        for raw_tok in item.expanded_parent_context.replace("\n", " ").split()
+    )
+    anchor_terms = list(
+        dict.fromkeys(
+            c
+            for c in candidates
+            if len(c) >= 4 and c not in stop_words and c not in seen_terms and c not in query_lower
         )
+    )[:4]
+    if not anchor_terms:
+        return None  # corpus offers nothing new: caller stops retrying
+    seen_terms.update(anchor_terms)  # only the anchors actually used
+
+    expansion = " ".join(anchor_terms)
+    if attempt == 1:
         rewritten = f"{initial_query} (specifically addressing: {expansion})"
         top_score = (
             p08_out.top_contexts[0].cross_encoder_score
@@ -144,27 +145,23 @@ def synthesize_rewritten_query(
         )
         reason = (
             f"Attempt 1 confidence ({top_score:.4f}) < threshold; "
-            f"injected corpus-grounded lexical anchors [{', '.join(anchor_terms) or 'domain defaults'}]."
+            f"injected corpus-grounded lexical anchors [{expansion.replace(' ', ', ')}]."
         )
     else:
-        expansion = (
-            " ".join(anchor_terms)
-            if anchor_terms
-            else "cross-encoder score threshold query rewrite loop late chunking"
-        )
         rewritten = (
             f"Technical architecture specification for {initial_query} including {expansion}"
         )
         reason = (
             f"Attempt {attempt} remained below threshold; reformulated into explicit "
-            f"technical specification query with expanded terms [{', '.join(anchor_terms) or 'fallback expansion'}]."
+            f"technical specification query with expanded terms [{expansion.replace(' ', ', ')}]."
         )
 
     return rewritten, reason
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
+    ctx: typer.Context,
     query: Annotated[
         str,
         typer.Option(
@@ -199,46 +196,67 @@ def main(
         ),
     ] = None,
     qdrant_path: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--qdrant-path",
             "-p",
-            help="Local persistent Qdrant path",
+            help="Local persistent Qdrant path, forwarded to P07 only when given (else QDRANT_PATH / P07 default)",
         ),
-    ] = "./qdrant_storage",
+    ] = None,
     rerank_backend: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rerank-backend",
             "-b",
-            help="Cross-Encoder backend ('transformers' or 'fastembed')",
+            help="P08 reranker plugin (sentence_transformers|fastembed), forwarded only when given",
         ),
-    ] = "transformers",
+    ] = None,
     rerank_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--rerank-model",
             "-m",
-            help="Cross-Encoder model name",
+            help="P08 cross-encoder model, forwarded only when given",
         ),
-    ] = "BAAI/bge-reranker-v2-m3",
+    ] = None,
+    prefetch_limit: Annotated[
+        int | None,
+        typer.Option("--prefetch-limit", "-l", help="P07 candidate pool per branch before RRF (forwarded only when given)"),
+    ] = None,
+    rrf_k: Annotated[
+        int | None,
+        typer.Option("--rrf-k", "-k", help="P07 Reciprocal Rank Fusion k constant (forwarded only when given)"),
+    ] = None,
+    top_k: Annotated[
+        int | None,
+        typer.Option("--top-k", "-K", help="P07 final fused candidates returned (forwarded only when given)"),
+    ] = None,
+    top_n: Annotated[
+        int | None,
+        typer.Option("--top-n", "-n", help="P08 final reranked contexts (forwarded only when given)"),
+    ] = None,
+    batch_size: Annotated[
+        int | None,
+        typer.Option("--batch-size", "-B", help="P08 cross-encoder batch size (forwarded only when given)"),
+    ] = None,
     crag_threshold: Annotated[
         float,
         typer.Option(
             "--crag-threshold",
             "-t",
-            help="Minimum Cross-Encoder score required for GROUNDED verdict",
+            envvar="RAG_CRAG_THRESHOLD",
+            help="Minimum Cross-Encoder score required for GROUNDED verdict (P09 reads RAG_CRAG_THRESHOLD itself)",
         ),
-    ] = 0.65,
+    ] = DEFAULT_CRAG_THRESHOLD,
     max_retries: Annotated[
         int,
         typer.Option(
             "--max-retries",
             "-r",
-            min=1,
-            help="Maximum CRAG loopback attempts before forcing synthesis",
+            min=0,
+            help="Retries after the first attempt (N retries = up to N+1 attempts) before forcing synthesis",
         ),
-    ] = 3,
+    ] = 2,
     quiet_children: Annotated[
         bool,
         typer.Option(
@@ -256,25 +274,10 @@ def main(
         ),
     ] = False,
 ) -> None:
-    if max_retries < 1:
-        raise typer.BadParameter("--max-retries must be at least 1")
-
     # 1. Input precedence: explicit --in-file, then piped stdin, then artifacts/05_indexed.json fallback
-    p05_indexed: Phase05IndexedOutput
-    if in_file is not None:
-        if not in_file.exists():
-            raise typer.BadParameter(f"Input file not found: {in_file}")
-        p05_indexed = cli_engine.load_upstream(in_file)
-    elif not sys.stdin.isatty():
-        p05_indexed = cli_engine.load_upstream(None)
-    else:
-        default_in = Path("artifacts/05_indexed.json")
-        if default_in.exists():
-            p05_indexed = cli_engine.load_upstream(default_in)
-        else:
-            raise typer.BadParameter(
-                "Expected upstream JSON via --in-file, stdin pipe, or default artifacts/05_indexed.json"
-            )
+    p05_indexed: Phase05IndexedOutput = cli_engine.load_upstream(
+        in_file, Path("artifacts/05_indexed.json")
+    )
 
     p05_json = p05_indexed.model_dump_json()
 
@@ -287,13 +290,20 @@ def main(
 
     artifacts_dir = out_file.resolve().parent
 
-    for attempt in range(1, max_retries + 1):
+    def explicit(name: str) -> bool:
+        # by enum name: typer >= 0.27 vendors its own click, so the enum class differs by version
+        return getattr(ctx.get_parameter_source(name), "name", None) == "COMMANDLINE"
+
+    # An option left to env/default is not forwarded: children resolve it from the same environment.
+    max_attempts = max_retries + 1
+    quiet_child = quiet_children or quiet
+    for attempt in range(1, max_attempts + 1):
         attempt_dir = artifacts_dir / f"crag_attempt_{attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
 
         if not quiet:
             err_console.rule(
-                f'[bold magenta]CRAG Loop Iteration {attempt}/{max_retries}[/bold magenta] | Query: [yellow]"{escape(current_query)}"[/yellow]'
+                f'[bold magenta]CRAG Loop Iteration {attempt}/{max_attempts}[/bold magenta] | Query: [yellow]"{escape(current_query)}"[/yellow]'
             )
 
         # --- Phase 06: Query Orchestration ---
@@ -306,25 +316,25 @@ def main(
                 "--out-file",
                 str(attempt_dir / "06_query_plan.json"),
             ],
-            quiet_child=quiet_children,
+            quiet_child=quiet_child,
         )
         p06_out = Phase06QueryPlanOutput.model_validate_json(p06_raw)
 
         # --- Phase 07: Live Qdrant Hybrid Retrieval ---
-        p07_args = [
-            "--qdrant-path",
-            qdrant_path,
-            "--out-file",
-            str(attempt_dir / "07_retrieved.json"),
-        ]
-        if qdrant_url:
-            p07_args.extend(["--qdrant-url", qdrant_url])
+        p07_args = forward(
+            qdrant_path=qdrant_path,
+            qdrant_url=qdrant_url if explicit("qdrant_url") else None,
+            prefetch_limit=prefetch_limit,
+            rrf_k=rrf_k,
+            top_k=top_k,
+            out_file=attempt_dir / "07_retrieved.json",
+        )
 
         p07_raw = invoke_cli_phase(
             "p07_retrieve.py",
             input_json=p06_out.model_dump_json(),
             args=p07_args,
-            quiet_child=quiet_children,
+            quiet_child=quiet_child,
         )
         p07_out = Phase07RetrievedOutput.model_validate_json(p07_raw)
 
@@ -332,15 +342,14 @@ def main(
         p08_raw = invoke_cli_phase(
             "p08_rerank.py",
             input_json=p07_out.model_dump_json(),
-            args=[
-                "--backend",
-                rerank_backend,
-                "--model",
-                rerank_model,
-                "--out-file",
-                str(attempt_dir / "08_reranked.json"),
-            ],
-            quiet_child=quiet_children,
+            args=forward(
+                backend=rerank_backend,
+                model=rerank_model,
+                top_n=top_n,
+                batch_size=batch_size,
+                out_file=attempt_dir / "08_reranked.json",
+            ),
+            quiet_child=quiet_child,
         )
         p08_out = Phase08RerankedOutput.model_validate_json(p08_raw)
 
@@ -348,13 +357,11 @@ def main(
         p09_raw = invoke_cli_phase(
             "p09_generate.py",
             input_json=p08_out.model_dump_json(),
-            args=[
-                "--crag-threshold",
-                str(crag_threshold),
-                "--out-file",
-                str(attempt_dir / "09_generated.json"),
-            ],
-            quiet_child=quiet_children,
+            args=forward(
+                crag_threshold=crag_threshold if explicit("crag_threshold") else None,
+                out_file=attempt_dir / "09_generated.json",
+            ),
+            quiet_child=quiet_child,
         )
         p09_out = Phase09GenerationOutput.model_validate_json(p09_raw)
 
@@ -374,41 +381,41 @@ def main(
             break
 
         # Verdict == REWRITE_REQUIRED
-        if attempt < max_retries:
-            next_query, reason = synthesize_rewritten_query(
+        rewrite = (
+            synthesize_rewritten_query(
                 initial_query=query,
                 current_query=current_query,
                 attempt=attempt,
                 p08_out=p08_out,
                 seen_terms=seen_expansion_terms,
             )
-            attempts_history.append(
-                CRAGAttemptRecord(
-                    attempt=attempt,
-                    query_used=current_query,
-                    crag_verdict=p09_out.crag_verdict,
-                    grounded_confidence=p09_out.grounded_confidence,
-                    top_chunk_ids=[c.chunk_id for c in p08_out.top_contexts],
-                    rewrite_reason=reason,
-                )
-            )
-            if not quiet:
-                err_console.print(
-                    f"[bold red]⚠ CRAG Verdict: REWRITE_REQUIRED[/bold red] "
-                    f"(score={p09_out.grounded_confidence:.4f} < {crag_threshold:.4f})\n"
-                    f"[bold yellow]↻ Rewriting Query ->[/bold yellow] {escape(next_query)}"
-                )
-            current_query = next_query
+            if attempt < max_attempts
+            else None
+        )
+        if attempt >= max_attempts:
+            reason = "Max retries exhausted; proceeding with best available context."
+        elif rewrite is None:
+            reason = "No new corpus anchor terms to expand the query; stopping retries (not converged)."
         else:
-            attempts_history.append(
-                CRAGAttemptRecord(
-                    attempt=attempt,
-                    query_used=current_query,
-                    crag_verdict=p09_out.crag_verdict,
-                    grounded_confidence=p09_out.grounded_confidence,
-                    top_chunk_ids=[c.chunk_id for c in p08_out.top_contexts],
-                    rewrite_reason="Max retries exhausted; proceeding with best available context.",
-                )
+            reason = rewrite[1]
+        attempts_history.append(
+            CRAGAttemptRecord(
+                attempt=attempt,
+                query_used=current_query,
+                crag_verdict=p09_out.crag_verdict,
+                grounded_confidence=p09_out.grounded_confidence,
+                top_chunk_ids=[c.chunk_id for c in p08_out.top_contexts],
+                rewrite_reason=reason,
+            )
+        )
+        if rewrite is None:
+            break
+        current_query = rewrite[0]
+        if not quiet:
+            err_console.print(
+                f"[bold red]⚠ CRAG Verdict: REWRITE_REQUIRED[/bold red] "
+                f"(score={p09_out.grounded_confidence:.4f} < {crag_threshold:.4f})\n"
+                f"[bold yellow]↻ Rewriting Query ->[/bold yellow] {escape(current_query)}"
             )
 
     if p09_out is None:
@@ -417,16 +424,14 @@ def main(
     # Copy winning attempt's Phase 09 artifact to canonical path under out_file's parent directory
     canonical_p09 = artifacts_dir / "09_generated.json"
     canonical_p09.parent.mkdir(parents=True, exist_ok=True)
-    canonical_p09.write_text(
-        p09_out.model_dump_json(indent=2), encoding="utf-8"
-    )
+    canonical_p09.write_bytes(payload_bytes(p09_out))
 
     # --- Phase 10: Final RAG Triad Evaluation ---
     p10_raw = invoke_cli_phase(
         "p10_evaluate.py",
         input_json=p09_out.model_dump_json(),
         args=["--out-file", str(artifacts_dir / "10_evaluated.json")],
-        quiet_child=quiet_children,
+        quiet_child=quiet_child,
     )
     p10_out = Phase10EvalOutput.model_validate_json(p10_raw)
 

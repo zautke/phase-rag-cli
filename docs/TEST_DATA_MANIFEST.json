@@ -1,0 +1,82 @@
+[
+  {
+    "name": "2026-10-29T191117Z-adagio-card-before.txt",
+    "bytes": 236360,
+    "sha256": "14e98802be54dafed0f4fbd56d3f5e784cced2a7ccfb1c5958aeedb75a97b3dd",
+    "bom": false,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "2026-11-08T190906Z-adagio.html",
+    "bytes": 16536631,
+    "sha256": "c54b664ff018c5ff97023c92245b56522d3b1ea9b0748f61c03b8f79eaf194ac",
+    "bom": false,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "claude team spawn command.md",
+    "bytes": 532,
+    "sha256": "d99bb160675c658b08591ec92ea4951390abb0350268e901e88911fa1dc795bf",
+    "bom": false,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "claude-code-settings-reprint.md",
+    "bytes": 82456,
+    "sha256": "dc01e08d4c62174245cd5f29f8651978bc22c820a693530ee76667408b366d13",
+    "bom": false,
+    "crlf": false,
+    "nul": false
+  },
+  {
+    "name": "Eula.txt",
+    "bytes": 7490,
+    "sha256": "8329bcbadc7f81539a4969ca13f0be5b8eb7652b912324a1926fc9bfb6ec005a",
+    "bom": true,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "HR-Employee-Attrition.csv",
+    "bytes": 227977,
+    "sha256": "a5c31e38bd7fafc9bc333884eb181b06b41b8e5e488e8f7ccb27199fb3be7659",
+    "bom": true,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "Obsidian, Basic Memory ERO, and GraphRAG - Verbatim Session Transcript - 2026-10-13.md",
+    "bytes": 66728,
+    "sha256": "549c603caa4eeb1fa2c2dcafc304c564f8d9c0098b44894fe04d5027e930a8ff",
+    "bom": false,
+    "crlf": false,
+    "nul": false
+  },
+  {
+    "name": "offline_currentversion_d.txt",
+    "bytes": 111487301,
+    "sha256": "f094493505f962ec117cd7272ba0ba45c7b182c6920fd6841310ae5bfc63f5f8",
+    "bom": false,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "RETROSPECTIVE.md",
+    "bytes": 22620,
+    "sha256": "5c10eaf906db78e31eae6b8a826b45410411bdeeec49b4c3b6483b5bfc5324c2",
+    "bom": false,
+    "crlf": true,
+    "nul": false
+  },
+  {
+    "name": "slider-design-showcase.html",
+    "bytes": 64880,
+    "sha256": "65d51b4e29d6a89e750eec2626ae44edd482595a3ab54c92f9a35b4e694e59d6",
+    "bom": false,
+    "crlf": false,
+    "nul": false
+  }
+]

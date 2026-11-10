@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [development, main]
+  push:
+    branches: [development, main]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]  # Windows-only paths: \\?\ walk, reparse tags, SIGBREAK, replace retry
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff check .
+      # non-live only: pyproject addopts = "-m 'not live'"; no model downloads in CI
+      - run: uv run pytest -q

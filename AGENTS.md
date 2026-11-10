@@ -11,7 +11,7 @@ OBJECTIVE: Coordinate 4 Specialty Subagents to implement, type-check, and live-v
    - `SUBAGENT_CORE_INGEST`: `pyproject.toml`, `rag_contracts.py`, `p01_load.py`..`p04_chunk.py`
    - `SUBAGENT_HYBRID_VEC`: `hybrid_engine.py`, `p05_index.py`, `p07_retrieve.py`
    - `SUBAGENT_RERANK_CRAG`: `p06_query.py`, `p08_rerank.py`, `p09_generate.py`, `p10_evaluate.py`, `p00_crag_orchestrator.py`
-   - `SUBAGENT_QA_AUDITOR`: `verify_pipeline.sh` (Post-Implementation Review + Live Terminal Test Battery)
+   - `SUBAGENT_QA_AUDITOR`: `verify_pipeline.py` (core) + thin `verify_pipeline.ps1` / `verify_pipeline.sh` wrappers (Post-Implementation Review + Live Terminal Test Battery)
 
 ## EXECUTION DAG & GATES
 - WAVE 1 (Blocking Foundation): Dispatch `SUBAGENT_CORE_INGEST` to emit `pyproject.toml` + `rag_contracts.py`. Gate: `uv run python -c "import rag_contracts"`.
@@ -32,13 +32,13 @@ OBJECTIVE: Coordinate 4 Specialty Subagents to implement, type-check, and live-v
   5. Implement `p04_chunk.py` (`Phase03ParsedOutput` -> sliding-window word chunker preserving `parent_markdown` -> `Phase04ChunkedOutput`).
 - **EXIT CRITERIA:** `uv run rag-p01 | uv run rag-p02 | uv run rag-p03 | uv run rag-p04` exits 0 and emits valid JSON on stdout.
 
-### Subagent 2: `SUBAGENT_HYBRID_VEC` (Qdrant + Jina-v3 + SPLADE Engine, Phases 05 & 07)
-- **OWNERSHIP:** `hybrid_engine.py`, `p05_index.py`, `p07_retrieve.py`
+### Subagent 2: `SUBAGENT_HYBRID_VEC` (Qdrant + plugin backends, Phases 05 & 07)
+- **OWNERSHIP:** `hybrid_engine.py`, `model_fetch.py`, `p05_index.py`, `p07_retrieve.py`
 - **UPSTREAM DEP:** `rag_contracts.py` (Read-Only)
 - **TASK:**
-  1. In `hybrid_engine.py`, implement singleton loaders for FastEmbed `jinaai/jina-embeddings-v3` (1024-d dense) and `prithivida/Splade_PP_en_v1` (sparse), plus dual-backend reranker (`BAAI/bge-reranker-v2-m3` via `sentence-transformers` and `jinaai/jina-reranker-v2-base-multilingual` via `fastembed`).
+  1. In `hybrid_engine.py`, dense/sparse/rerank are named backend plugins (default dense: sentence-transformers jina-v3) held in `DENSE_BACKENDS`, `SPARSE_BACKENDS`, `RERANK_BACKENDS` (name -> loader dicts, lazy singletons). Built in: dense `sentence_transformers` (`jinaai/jina-embeddings-v3`, default) and `fastembed`; sparse `fastembed` (`prithivida/Splade_PP_en_v1`); rerank `sentence_transformers` (`BAAI/bge-reranker-v2-m3`, default) and `fastembed` (`jinaai/jina-reranker-v2-base-multilingual`). Selected by `rag-p05 -b/-m/-s` and `rag-p08 -b/-m`; defaults live in `.env.example` (`RAG_DENSE_BACKEND`, `RAG_DENSE_MODEL`, `RAG_SPARSE_MODEL`). Every model download goes through `model_fetch.ensure_model` (aria2c, announced, progress on stderr).
   2. Configure Qdrant collection with named vectors `jina-dense` (Cosine + INT8 ScalarQuantization) and `splade-sparse` (`SparseIndexParams(on_disk=False)`), plus UUIDv5 deterministic point IDs.
-  3. Implement `p05_index.py`: prepend contextual header prefix `[Doc: X | Section: Y]`, batch-encode dense+sparse, upsert to Qdrant, emit `Phase05IndexedOutput`.
+  3. Implement `p05_index.py`: prepend contextual header prefix `[Doc: X | Section: Y]`, batch-encode dense+sparse, upsert to Qdrant, emit `Phase05IndexedOutput` (records `dense_backend`, `dense_model`, `sparse_model`; P06 copies them and P07 encodes the query with exactly those).
   4. Implement `p07_retrieve.py`: encode query+HyDE (dense) and raw query (sparse), capture per-branch diagnostic scores, execute Qdrant `query_points()` with `Prefetch` + `RrfQuery(rrf=Rrf(k=rrf_k, weights=[dense_weight, sparse_weight]))`, emit `Phase07RetrievedOutput`.
 - **EXIT CRITERIA:** `uv run rag-p05 -i artifacts/04_chunked.json` and `uv run rag-p07 -i artifacts/06_query_plan.json` pass schema validation.
 
@@ -54,7 +54,7 @@ OBJECTIVE: Coordinate 4 Specialty Subagents to implement, type-check, and live-v
 - **EXIT CRITERIA:** `uv run rag-p00` converges from `REWRITE_REQUIRED` to `GROUNDED` and writes `artifacts/00_crag_loop_summary.json`.
 
 ### Subagent 4: `SUBAGENT_QA_AUDITOR` (Post-Implementation Review & Terminal Test Battery)
-- **OWNERSHIP:** `verify_pipeline.sh`, `verify_pipeline.ps1`
+- **OWNERSHIP:** `verify_pipeline.py`, `verify_pipeline.sh`, `verify_pipeline.ps1`
 - **TASK:**
   1. Run static post-implementation review: verify zero `print()` calls pollute `stdout`, verify every `Phase0X` schema sets `ConfigDict(strict=True, extra="forbid")`, and run `ruff check` + AST syntax verification.
   2. Execute isolated per-phase live terminal tests (`rag-p01` through `rag-p10`) verifying:
@@ -62,4 +62,4 @@ OBJECTIVE: Coordinate 4 Specialty Subagents to implement, type-check, and live-v
      (b) Persisted JSON artifact on disk (`artifacts/0X_*.json`),
      (c) Validated Pydantic round-trip via `model_validate_json()` on `stdout`.
   3. Execute full 10-phase linear UNIX pipe battery (`rag-p01 | ... | rag-p10`).
-  4. Execute cyclic CRAG loopback battery (`rag-p00 --crag-threshold 0.92`) verifying multi-attempt query rewriting.
+  4. Execute cyclic CRAG loopback battery (`rag-p00 --crag-threshold 0.99`; 0.92 now converges at attempt 3 after the anchor rewrite) verifying multi-attempt query rewriting.

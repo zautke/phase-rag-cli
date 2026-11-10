@@ -24,7 +24,7 @@ def Usage() -> str:
     )
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     query: Annotated[
         str,
@@ -65,10 +65,7 @@ def main(
     sub_queries = [
         q.strip() for q in query.replace(" and ", " | ").split("|") if q.strip()
     ]
-    hyde_passage = (
-        f"Technical specification answering '{query}': Hybrid RAG combines Qdrant HNSW dense embeddings "
-        f"with SPLADE sparse vectors via Reciprocal Rank Fusion (RRF) and verifies relevance via CRAG."
-    )
+    hyde_passage = f"A concise, factual passage from the source documents that directly answers: {query}"
 
     output = Phase06QueryPlanOutput(
         run_id=upstream.run_id,
@@ -77,7 +74,10 @@ def main(
         sub_queries=sub_queries,
         hyde_passage=hyde_passage,
         metadata_filters={"collection": upstream.qdrant_collection},
-        index_snapshot=upstream,
+        qdrant_collection=upstream.qdrant_collection,
+        dense_backend=upstream.dense_backend,
+        dense_model=upstream.dense_model,
+        sparse_model=upstream.sparse_model,
     )
     cli_engine.emit(output, out_file, quiet)
 

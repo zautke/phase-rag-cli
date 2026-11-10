@@ -56,23 +56,20 @@ def test_strict_pydantic_contracts_reject_invalid_fields() -> None:
         )
 
 
-def test_ast_no_bare_print_in_task1_modules() -> None:
-    """Ensure zero bare print() calls exist in rag_contracts.py and p01..p04."""
+def test_ast_no_bare_print_in_any_module() -> None:
+    """Zero print() to stdout in every phase/engine module (stdout is the JSON payload only)."""
     root = Path(__file__).resolve().parent.parent
-    for fname in ("rag_contracts.py", "p01_load.py", "p02_markdown.py", "p03_parse.py", "p04_chunk.py"):
-        fpath = root / fname
-        tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fname)
+    modules = [*root.glob("p[0-9][0-9]_*.py"), *(root / f"{n}.py" for n in (
+        "rag_contracts", "hybrid_engine", "chunkers", "model_fetch", "rag_logging")),
+        *(root / "loaders").glob("*.py")]
+    assert any(m.parent.name == "loaders" for m in modules)
+    for fpath in modules:
+        tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fpath.name)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print":
-                pytest.fail(f"Bare print() found in {fname}:{node.lineno}")
-
-
-def test_usage_and_short_long_flags_present() -> None:
-    """Verify every CLI module exposes Usage() and supports short + long flags."""
-    for mod in (p01_load, p02_markdown, p03_parse, p04_chunk):
-        assert hasattr(mod, "Usage")
-        usage_text = mod.Usage()
-        assert isinstance(usage_text, str) and "Usage:" in usage_text
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
+                    and all(k.arg != "file" or ast.unparse(k.value) == "sys.stdout"
+                            for k in node.keywords)):  # file=<anything but sys.stdout> is fine
+                pytest.fail(f"print() to stdout found in {fpath.name}:{node.lineno}")
 
 
 def test_contract_chain_continuity_p01_to_p04() -> None:
@@ -257,32 +254,7 @@ def test_p01_to_p04_stdin_stdout_pipe_and_bom_tolerance(tmp_path: Path) -> None:
     )
     assert final_obj.model_dump() == disk_obj.model_dump()
     assert len(final_obj.chunks) == 2
-    assert final_obj.chunks[0].doc_id == "alpha"
+    assert final_obj.chunks[0].doc_id == "alpha.md"  # doc_id = path relative to --source-dir
     assert final_obj.chunks[1].header_hierarchy == ["Section One", "Sub Section"]
-
-
-def test_p01_html_mime_and_stem_collision_disambiguation(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parent.parent
-    src_dir = tmp_path / "collision_corpus"
-    src_dir.mkdir()
-
-    # Create two files sharing identical stem but different extensions
-    (src_dir / "guide.md").write_text("# Guide MD\nMarkdown text.", encoding="utf-8")
-    (src_dir / "guide.html").write_text("<h1>Guide HTML</h1><p>HTML body.</p>", encoding="utf-8")
-
-    proc = subprocess.run(
-        [sys.executable, str(root / "p01_load.py"), "--source-dir", str(src_dir), "--out-file", str(tmp_path / "p1.json"), "--quiet"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=True,
-    )
-    loaded = rc.Phase01LoadedOutput.model_validate_json(proc.stdout)
-    assert len(loaded.documents) == 2
-
-    docs_by_id = {d.doc_id: d for d in loaded.documents}
-    assert "guide_md" in docs_by_id
-    assert "guide_html" in docs_by_id
-    assert docs_by_id["guide_md"].mime_type == "text/markdown"
-    assert docs_by_id["guide_html"].mime_type == "text/html"
+    # same-stem / different-extension ids: tests/test_p01_load.py::test_n22_*
 

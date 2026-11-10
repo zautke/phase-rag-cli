@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 # p08_rerank.py
+import html
+import textwrap
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from hybrid_engine import (
+    DEFAULT_RERANK_BACKEND,
     DEFAULT_RERANK_MODEL,
+    RERANK_BACKENDS,
     rerank_passages_batch,
+    resolve_backend,
+    resolve_rerank_model,
 )
 from rag_contracts import (
     Phase07RetrievedOutput,
     Phase08RerankedOutput,
     PhaseCLI,
     RerankedContextItem,
+    err_console,
 )
 
 app = typer.Typer(add_completion=False)
@@ -54,7 +61,26 @@ def apply_lost_in_the_middle_ordering(
     return left + list(reversed(right))
 
 
-@app.command()
+def assemble_xml_context(selected: list[RerankedContextItem], reorder_litm: bool) -> str:
+    """<retrieved_context> block; `selected` is in cross-encoder order and each <document> carries
+    its 1-based cross-encoder rank, so the block's physical order may differ without losing it.
+    Every body line is indented >= 4 spaces so only real opening tags sit at the 2-space indent."""
+    rank = {id(item): n for n, item in enumerate(selected, start=1)}
+    ordered = apply_lost_in_the_middle_ordering(selected) if reorder_litm else selected
+    parts = ["<retrieved_context>"]
+    for item in ordered:
+        parts.append(
+            f'  <document id="{html.escape(item.doc_id)}" chunk_id="{html.escape(item.chunk_id)}" '
+            f'rank="{rank[id(item)]}" '
+            f'rerank_score="{item.cross_encoder_score:.4f}">\n'
+            f"{textwrap.indent(item.expanded_parent_context, '    ')}\n"
+            f"  </document>"
+        )
+    parts.append("</retrieved_context>")
+    return "\n".join(parts)
+
+
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
@@ -77,7 +103,8 @@ def main(
         typer.Option(
             "--model",
             "-m",
-            help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual)",
+            envvar="RAG_RERANK_MODEL",
+            help="Cross-Encoder model (e.g., BAAI/bge-reranker-v2-m3, jinaai/jina-reranker-v3, or jinaai/jina-reranker-v2-base-multilingual; with -b fastembed the torch default maps to jinaai/jina-reranker-v2-base-multilingual)",
         ),
     ] = DEFAULT_RERANK_MODEL,
     backend: Annotated[
@@ -85,9 +112,10 @@ def main(
         typer.Option(
             "--backend",
             "-b",
-            help="Execution runtime: 'transformers' (PyTorch/MPS/CUDA) or 'fastembed' (ONNX)",
+            envvar="RAG_RERANK_BACKEND",
+            help=f"Reranker plugin ({'|'.join(sorted(RERANK_BACKENDS))}): 'sentence_transformers' = PyTorch/MPS/CUDA, 'fastembed' = ONNX",
         ),
-    ] = "transformers",
+    ] = DEFAULT_RERANK_BACKEND,
     batch_size: Annotated[
         int,
         typer.Option(
@@ -129,6 +157,11 @@ def main(
         ),
     ] = False,
 ) -> None:
+    rerank_backend = backend.lower()
+    try:
+        resolve_backend(RERANK_BACKENDS, rerank_backend, "rerank")
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
     upstream: Phase07RetrievedOutput = cli_engine.load_upstream(in_file)
     query = upstream.query_plan.original_query
     candidates = upstream.candidates
@@ -145,11 +178,14 @@ def main(
 
     # 1. Batch score all (query, contextualized_text) candidate pairs through the live Cross-Encoder
     passages = [cand.contextualized_text for cand in candidates]
+    resolved_model = resolve_rerank_model(model_name, rerank_backend)
+    if not quiet:
+        err_console.print(f"[cyan]Reranker:[/cyan] {rerank_backend} / {resolved_model}")
     ce_scores = rerank_passages_batch(
         query=query,
         passages=passages,
-        model_name=model_name,
-        backend="fastembed" if backend.lower() == "fastembed" else "transformers",
+        model_name=resolved_model,
+        backend=rerank_backend,
         batch_size=batch_size,
     )
 
@@ -179,23 +215,10 @@ def main(
         selected = scored_items[:top_n]
 
     # 4. Assemble XML Context Block (with optional Lost-in-the-Middle attention ordering)
-    xml_ordered_items = (
-        apply_lost_in_the_middle_ordering(selected) if reorder_litm else selected
-    )
-
-    xml_parts = ["<retrieved_context>"]
-    for item in xml_ordered_items:
-        xml_parts.append(
-            f'  <document id="{item.doc_id}" chunk_id="{item.chunk_id}" rerank_score="{item.cross_encoder_score:.4f}">\n'
-            f"    {item.expanded_parent_context}\n"
-            f"  </document>"
-        )
-    xml_parts.append("</retrieved_context>")
-
     output = Phase08RerankedOutput(
         run_id=upstream.run_id,
         original_query=query,
-        xml_context_block="\n".join(xml_parts),
+        xml_context_block=assemble_xml_context(selected, reorder_litm),
         top_contexts=selected,
     )
     cli_engine.emit(output, out_file, quiet)

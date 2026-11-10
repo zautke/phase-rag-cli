@@ -38,7 +38,7 @@ def html_to_clean_markdown(raw: str) -> str:
     return text.strip()
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,

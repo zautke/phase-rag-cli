@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from huggingface_hub.errors import RepositoryNotFoundError
 from qdrant_client import models
 
 from hybrid_engine import (
+    DEFAULT_QDRANT_PATH,
     DENSE_VECTOR_NAME,
     SPARSE_VECTOR_NAME,
     embed_dense_batch,
@@ -39,7 +41,7 @@ def Usage() -> str:
     )
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
@@ -55,8 +57,8 @@ def main(
     ] = None,
     qdrant_path: Annotated[
         str,
-        typer.Option("--qdrant-path", "-p", help="Local persistent Qdrant path"),
-    ] = "./qdrant_storage",
+        typer.Option("--qdrant-path", "-p", envvar="QDRANT_PATH", help="Local persistent Qdrant path"),
+    ] = DEFAULT_QDRANT_PATH,
     prefetch_limit: Annotated[
         int,
         typer.Option("--prefetch-limit", "-l", help="Candidate pool per branch before RRF"),
@@ -83,11 +85,21 @@ def main(
     ] = False,
 ) -> None:
     upstream: Phase06QueryPlanOutput = cli_engine.load_upstream(in_file)
-    collection = upstream.index_snapshot.qdrant_collection
+    collection = upstream.qdrant_collection
 
     # 1. Encode dense query (original query + HyDE expansion) and sparse query (original lexical query)
-    q_dense_vec = embed_dense_batch([f"{upstream.original_query}\n{upstream.hyde_passage}"])[0]
-    q_sparse_idx, q_sparse_val = embed_sparse_batch([upstream.original_query])[0]
+    # Backend and models come from upstream (the index's own), so query/index can never mismatch.
+    # An unknown backend/model named by the artifact is a usage error (exit 2), not a traceback.
+    try:
+        q_dense_vec = embed_dense_batch(
+            [f"{upstream.original_query}\n{upstream.hyde_passage}"],
+            upstream.dense_backend,
+            upstream.dense_model,
+            query=True,
+        )[0]
+        q_sparse_idx, q_sparse_val = embed_sparse_batch([upstream.original_query], upstream.sparse_model)[0]
+    except (ValueError, RepositoryNotFoundError) as e:
+        raise typer.BadParameter(f"upstream P06 artifact names an unusable embedder: {e}") from None
     q_sparse_vec = models.SparseVector(indices=q_sparse_idx, values=q_sparse_val)
 
     client = get_qdrant_client(qdrant_url, qdrant_path)

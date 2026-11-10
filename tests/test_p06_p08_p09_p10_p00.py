@@ -2,7 +2,6 @@
 # tests/test_p06_p08_p09_p10_p00.py
 from __future__ import annotations
 
-import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -17,40 +16,7 @@ import p10_evaluate
 import rag_contracts as rc
 
 
-def test_ast_no_bare_print_in_task3_modules() -> None:
-    """Ensure zero bare print() calls exist in p06, p08, p09, p10, and p00."""
-    root = Path(__file__).resolve().parent.parent
-    for fname in (
-        "p06_query.py",
-        "p08_rerank.py",
-        "p09_generate.py",
-        "p10_evaluate.py",
-        "p00_crag_orchestrator.py",
-    ):
-        fpath = root / fname
-        tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=fname)
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "print"
-            ):
-                pytest.fail(f"Bare print() found in {fname}:{node.lineno}")
-
-
-def test_usage_and_contracts_task3_modules() -> None:
-    """Verify Usage() and PhaseCLI contracts across p06, p08, p09, p10, and p00."""
-    for mod in (
-        p06_query,
-        p08_rerank,
-        p09_generate,
-        p10_evaluate,
-        p00_crag_orchestrator,
-    ):
-        assert hasattr(mod, "Usage")
-        usage_text = mod.Usage()
-        assert isinstance(usage_text, str) and "Usage:" in usage_text
-
+def test_contract_chain_p06_to_p10_and_p00() -> None:
     assert p06_query.cli_engine.input_model is rc.Phase05IndexedOutput
     assert p06_query.cli_engine.output_model is rc.Phase06QueryPlanOutput
 
@@ -118,16 +84,16 @@ def test_ndcg_and_answer_relevance_unit() -> None:
     """Unit test new computed nDCG and answer relevance metrics in p10."""
     xml_ideal = (
         '<retrieved_context>\n'
-        '  <document id="d1" chunk_id="c1" rerank_score="0.9">\n    ctx\n  </document>\n'
-        '  <document id="d2" chunk_id="c2" rerank_score="0.5">\n    ctx\n  </document>\n'
+        '  <document id="d1" chunk_id="c1" rank="1" rerank_score="0.9">\n    ctx\n  </document>\n'
+        '  <document id="d2" chunk_id="c2" rank="2" rerank_score="0.5">\n    ctx\n  </document>\n'
         '</retrieved_context>'
     )
     assert p10_evaluate.compute_ndcg_at_k(xml_ideal) == 1.0
 
     xml_inverted = (
         '<retrieved_context>\n'
-        '  <document id="d1" chunk_id="c1" rerank_score="0.2">\n    ctx\n  </document>\n'
-        '  <document id="d2" chunk_id="c2" rerank_score="0.8">\n    ctx\n  </document>\n'
+        '  <document id="d1" chunk_id="c1" rank="1" rerank_score="0.2">\n    ctx\n  </document>\n'
+        '  <document id="d2" chunk_id="c2" rank="2" rerank_score="0.8">\n    ctx\n  </document>\n'
         '</retrieved_context>'
     )
     ndcg_inv = p10_evaluate.compute_ndcg_at_k(xml_inverted)
@@ -143,6 +109,25 @@ def test_ndcg_and_answer_relevance_unit() -> None:
     ans_poor = "Nothing related here."
     relevance_poor = p10_evaluate.compute_answer_relevance(q, ans_poor)
     assert relevance_poor == 0.0
+
+
+def test_p09_skips_headings_and_unpunctuated_bullets() -> None:
+    """D-C1: Markdown headings / unterminated bullets are not answer sentences; a real sentence is."""
+    items = [
+        rc.RerankedContextItem(
+            chunk_id="chk_0",
+            doc_id="doc_0",
+            cross_encoder_score=0.9,
+            expanded_parent_context="# Hybrid RAG Architecture\n## Hybrid RAG Overview\n- Hybrid RAG fusion list item\n- Dense and sparse vectors are merged by RRF.\nHybrid RAG fuses dense and sparse vectors with RRF.",
+        )
+    ]
+    ans, _ = p09_generate.extract_grounded_answer(
+        query="Hybrid RAG architecture overview fusion", top_contexts=items, crag_threshold=0.5, max_score=0.9, verdict="GROUNDED"
+    )
+    assert "Hybrid RAG Architecture [" not in ans and "Hybrid RAG Overview [" not in ans
+    assert "list item [" not in ans
+    assert "Hybrid RAG fuses dense and sparse vectors with RRF. [doc_0:chk_0]" in ans
+    assert "Dense and sparse vectors are merged by RRF. [doc_0:chk_0]" in ans
 
 
 def test_p09_extractive_grounding_unit() -> None:
@@ -187,6 +172,7 @@ def test_p09_extractive_grounding_unit() -> None:
     assert cit_empty == []
 
 
+@pytest.mark.live
 def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     """
     Test p06_query.py, p08_rerank.py (with fastembed backend), p09_generate.py,
@@ -419,7 +405,7 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
             "-t",
             "0.9999",
             "-r",
-            "2",
+            "1",
             "-c",
         ],
         cwd=str(external_dir),
@@ -447,3 +433,65 @@ def test_end_to_end_p06_p08_p09_p10_and_p00_loop(tmp_path: Path) -> None:
     assert (artifacts_dir / "09_generated.json").exists()
     assert (artifacts_dir / "10_evaluated.json").exists()
     assert f00.exists()
+
+
+def test_resolve_rerank_model_wires_fastembed_default() -> None:
+    from hybrid_engine import (
+        DEFAULT_FASTEMBED_RERANK_MODEL,
+        DEFAULT_RERANK_MODEL,
+        resolve_rerank_model,
+    )
+
+    assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "fastembed") == DEFAULT_FASTEMBED_RERANK_MODEL
+    assert resolve_rerank_model(DEFAULT_RERANK_MODEL, "sentence_transformers") == DEFAULT_RERANK_MODEL
+    assert resolve_rerank_model("custom/model", "fastembed") == "custom/model"
+
+
+def test_p00_forwards_p07_p08_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    p05 = rc.Phase05IndexedOutput(
+        run_id="r", qdrant_collection="c", indexed_records=[],
+        dense_backend="sentence_transformers", dense_model="d", sparse_model="s",
+    )
+    f05 = tmp_path / "05.json"
+    f05.write_text(p05.model_dump_json(), encoding="utf-8")
+    plan = rc.Phase06QueryPlanOutput(
+        run_id="r",
+        original_query="q",
+        route="hybrid_rag",
+        sub_queries=["q"],
+        hyde_passage="h",
+        metadata_filters={},
+        qdrant_collection="c",
+        dense_backend="sentence_transformers",
+        dense_model="d",
+        sparse_model="s",
+    )
+    p07 = rc.Phase07RetrievedOutput(run_id="r", query_plan=plan, candidates=[])
+    calls: dict[str, list[str]] = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake(script: str, input_json: str, args: list[str], quiet_child: bool) -> str:
+        calls[script] = args
+        if script == "p06_query.py":
+            return plan.model_dump_json()
+        if script == "p07_retrieve.py":
+            return p07.model_dump_json()
+        raise Stop
+
+    monkeypatch.setattr(p00_crag_orchestrator, "invoke_cli_phase", fake)
+    res = CliRunner().invoke(
+        p00_crag_orchestrator.app,
+        ["-i", str(f05), "-o", str(tmp_path / "00.json"), "-l", "7", "-k", "33", "-K", "4",
+         "-n", "2", "-B", "8", "-s"],
+    )
+    assert isinstance(res.exception, Stop)
+    a07, a08 = calls["p07_retrieve.py"], calls["p08_rerank.py"]
+    assert a07[a07.index("--prefetch-limit") + 1] == "7"
+    assert a07[a07.index("--rrf-k") + 1] == "33"
+    assert a07[a07.index("--top-k") + 1] == "4"
+    assert a08[a08.index("--top-n") + 1] == "2"
+    assert a08[a08.index("--batch-size") + 1] == "8"

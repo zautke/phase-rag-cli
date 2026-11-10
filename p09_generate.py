@@ -7,6 +7,8 @@ from typing import Annotated
 import typer
 
 from rag_contracts import (
+    DEFAULT_CRAG_THRESHOLD,
+    CragVerdict,
     Phase08RerankedOutput,
     Phase09GenerationOutput,
     PhaseCLI,
@@ -30,12 +32,55 @@ def Usage() -> str:
     )
 
 
+MATH_DELIMITERS = ((r"\[", r"\]"), ("$$", "$$"))
+
+
+def _block_end(lines: list[str], i: int) -> int | None:
+    """Index of the last line of the verbatim block that starts at lines[i]; None when lines[i] is prose."""
+    s = lines[i].strip()
+    last = len(lines) - 1
+    if s.startswith(("```", "~~~")):  # fenced code, an unclosed fence runs to the end
+        return next((k for k in range(i + 1, len(lines)) if lines[k].strip().startswith(s[:3])), last)
+    for opener, closer in MATH_DELIMITERS:  # display math: \[ ... \] or $$ ... $$
+        if s.startswith(opener):
+            if closer in s[len(opener):]:
+                return i
+            return next((k for k in range(i + 1, len(lines)) if closer in lines[k]), last)
+    if s.startswith("|"):  # Markdown table: consecutive rows
+        end = i
+        while end < last and lines[end + 1].strip().startswith("|"):
+            end += 1
+        return end
+    return None
+
+
+def split_evidence_blocks(text: str) -> tuple[list[str], list[str]]:
+    """Split Markdown into (prose lines, verbatim blocks).
+
+    Blocks are fenced code, display math (`\\[ .. \\]`, `$$ .. $$`) and table blocks. Their lines carry
+    the evidence of a context but rarely end in `.!?`, so sentence extraction cannot represent them."""
+    lines = text.replace("\r", "").split("\n")
+    prose: list[str] = []
+    blocks: list[str] = []
+    i = 0
+    while i < len(lines):
+        end = _block_end(lines, i)
+        if end is None:
+            if lines[i].strip():
+                prose.append(lines[i].strip())
+            i += 1
+        else:
+            blocks.append("\n".join(line.rstrip() for line in lines[i : end + 1]))
+            i = end + 1
+    return prose, blocks
+
+
 def extract_grounded_answer(
     query: str,
     top_contexts: list[RerankedContextItem],
     crag_threshold: float,
     max_score: float,
-    verdict: str,
+    verdict: CragVerdict,
 ) -> tuple[str, list[str]]:
     citations = [f"[{c.doc_id}:{c.chunk_id}]" for c in top_contexts]
     if not top_contexts:
@@ -53,17 +98,20 @@ def extract_grounded_answer(
 
     candidate_sentences: list[tuple[int, float, str, str]] = []
 
-    for item in top_contexts:
+    evidence_blocks: list[str] = []
+    for rank, item in enumerate(top_contexts):
         citation = f"[{item.doc_id}:{item.chunk_id}]"
-        lines = [
-            line.strip()
-            for line in item.expanded_parent_context.replace("\r", "").split("\n")
-            if line.strip()
-        ]
+        lines, blocks = split_evidence_blocks(item.expanded_parent_context)
+        if rank == 0:  # blocks of the top-ranked context are kept whole, in document order
+            evidence_blocks = blocks
         for line in lines:
-            clean_line = line.lstrip("#").strip()
-            if not clean_line:
+            if line.startswith("#"):  # Markdown heading, not an answer sentence
                 continue
+            clean_line = line
+            if bullet := re.match(r"(?:[-*+]|\d+[.)])\s+", line):  # list item: keep only if it ends like a sentence
+                clean_line = line[bullet.end():].strip()
+                if not clean_line or clean_line[-1] not in ".!?":
+                    continue
             parts = [
                 p.strip()
                 for p in re.split(r"(?<=[.!?])\s+", clean_line)
@@ -88,13 +136,10 @@ def extract_grounded_answer(
         if len(selected_sentences) >= 3:
             break
 
-    body = (
-        " ".join(selected_sentences)
-        if selected_sentences
-        else (
-            top_contexts[0].expanded_parent_context.strip()
-            + f" [{top_contexts[0].doc_id}:{top_contexts[0].chunk_id}]"
-        )
+    parts = [" ".join(selected_sentences)] if selected_sentences else []
+    parts += [f"{block}\n{citations[0]}" for block in evidence_blocks]
+    body = "\n\n".join(parts) if parts else (
+        top_contexts[0].expanded_parent_context.strip() + f" {citations[0]}"
     )
 
     if verdict == "REWRITE_REQUIRED":
@@ -110,7 +155,7 @@ def extract_grounded_answer(
     return synthesized, citations
 
 
-@app.command()
+@app.command(epilog=Usage())
 def main(
     in_file: Annotated[
         Path | None,
@@ -133,9 +178,10 @@ def main(
         typer.Option(
             "--crag-threshold",
             "-t",
+            envvar="RAG_CRAG_THRESHOLD",
             help="Minimum Cross-Encoder score required for GROUNDED verdict",
         ),
-    ] = 0.60,
+    ] = DEFAULT_CRAG_THRESHOLD,
     quiet: Annotated[
         bool,
         typer.Option(
@@ -149,7 +195,7 @@ def main(
     max_score = max(
         (c.cross_encoder_score for c in upstream.top_contexts), default=0.0
     )
-    verdict = "GROUNDED" if max_score >= crag_threshold else "REWRITE_REQUIRED"
+    verdict: CragVerdict = "GROUNDED" if max_score >= crag_threshold else "REWRITE_REQUIRED"
 
     synthesized, citations = extract_grounded_answer(
         query=upstream.original_query,
