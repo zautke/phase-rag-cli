@@ -70,6 +70,36 @@ def compute_answer_relevance(query: str, answer: str) -> float:
     return round(matches / len(q_terms), 4)
 
 
+# Templated lead-in P09 adds in front of the extracted claims; it is not a claim about the corpus.
+ANSWER_PREFIX = re.compile(
+    r"^\s*(?:Verified grounded answer:|Insufficient retrieval grounding:.*?Synthesizing partial context:)\s*",
+    re.DOTALL,
+)
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.split())
+
+
+def compute_faithfulness(answer: str, citations: list[str], xml_context_block: str) -> float:
+    """
+    Fraction of the answer's claims that appear verbatim in the retrieved contexts.
+
+    faithfulness = supported / total, where a claim is one citation-delimited segment of the answer
+    (an extracted sentence or a verbatim block; the P09 lead-in is dropped) and it is supported when
+    its whitespace-normalized text is a substring of the whitespace-normalized `xml_context_block`
+    (every cited context). An answer with no claim, or with text no context contains (for example the
+    "No relevant context" message), scores 0.0; one fabricated sentence among four scores 0.75.
+    """
+    parts = re.split("|".join(re.escape(c) for c in citations), answer) if citations else [answer]
+    parts[0] = ANSWER_PREFIX.sub("", parts[0], count=1)
+    claims = [c for c in map(_squash, parts) if c]
+    if not claims:
+        return 0.0
+    haystack = _squash(xml_context_block)
+    return round(sum(c in haystack for c in claims) / len(claims), 4)
+
+
 @app.command(epilog=Usage())
 def main(
     in_file: Annotated[
@@ -103,10 +133,9 @@ def main(
     ndcg = compute_ndcg_at_k(upstream.xml_context_block)
 
     # 2. Faithfulness / Hallucination Detection
-    ans_tokens = set(upstream.synthesized_answer.lower().split())
-    ctx_tokens = set(upstream.xml_context_block.lower().split())
-    overlap_ratio = len(ans_tokens & ctx_tokens) / max(1, len(ans_tokens))
-    faithfulness = round(min(1.0, overlap_ratio + 0.25), 4)
+    faithfulness = compute_faithfulness(
+        upstream.synthesized_answer, upstream.citations, upstream.xml_context_block
+    )
 
     # 3. Answer Relevance
     answer_relevance = compute_answer_relevance(

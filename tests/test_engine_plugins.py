@@ -348,3 +348,55 @@ def test_p05_exposes_plugin_flags_in_help() -> None:
     usage = p05_index.Usage()
     for flag in ("--dense-backend / -b", "--dense-model / -m", "--sparse-model / -s"):
         assert flag in usage
+
+
+# --- D-E1: bounded encode batches (a 184-chunk real document exhausted 15.6 GiB inside SPLADE) --------
+class _Recorder:
+    """Embedder stand-in recording the length of every list it receives."""
+
+    def __init__(self) -> None:
+        self.sizes: list[int] = []
+
+    def dense(self, texts, query):
+        self.sizes.append(len(texts))
+        return [[float(len(t))] for t in texts]
+
+    def sparse(self, texts):
+        self.sizes.append(len(texts))
+        return [([i], [float(len(t))]) for i, t in enumerate(texts)]
+
+
+@pytest.mark.parametrize("n", [0, 1, 16, 17, 184])
+def test_dense_encode_is_batched(monkeypatch: pytest.MonkeyPatch, n: int, capsys: pytest.CaptureFixture[str]) -> None:
+    rec = _Recorder()
+    monkeypatch.setitem(he.DENSE_BACKENDS, "rec", lambda _m: (rec.dense, 1))
+    texts = [f"t{i}" for i in range(n)]
+    out = he.embed_dense_batch(texts, "rec", f"model-dense-{n}", batch_size=16)
+    assert out == [[float(len(t))] for t in texts]  # order and total preserved
+    assert sum(rec.sizes) == n and all(s <= 16 for s in rec.sizes)
+    err = capsys.readouterr().err
+    if n > 16:
+        assert f"embedding dense {n}/{n}\n" in err and ("embedding dense 32/" in err) == (n >= 32)
+        assert err.count("embedding dense") == len(rec.sizes)  # one line per batch
+    else:
+        assert err == ""  # a single batch stays silent
+
+
+@pytest.mark.parametrize("n", [1, 17, 184])
+def test_sparse_encode_is_batched(monkeypatch: pytest.MonkeyPatch, n: int, capsys: pytest.CaptureFixture[str]) -> None:
+    rec = _Recorder()
+    monkeypatch.setitem(he.SPARSE_BACKENDS, "fastembed", lambda _m: rec.sparse)
+    texts = [f"t{i}" for i in range(n)]
+    out = he.embed_sparse_batch(texts, f"model-sparse-{n}", batch_size=16)
+    assert len(out) == n and sum(rec.sizes) == n and all(s <= 16 for s in rec.sizes)
+    assert capsys.readouterr().err.count("embedding sparse") == (len(rec.sizes) if n > 16 else 0)
+
+
+def test_embed_batch_size_default_and_wiring() -> None:
+    import typer.main
+
+    assert he.DEFAULT_EMBED_BATCH_SIZE == 16
+    params = {p.name: p for p in typer.main.get_command(p05_index.app).params}
+    assert params["embed_batch_size"].envvar == "RAG_EMBED_BATCH_SIZE"
+    assert params["embed_batch_size"].default == he.DEFAULT_EMBED_BATCH_SIZE
+    assert "--embed-batch-size / -e" in p05_index.Usage()

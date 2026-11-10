@@ -25,7 +25,12 @@
 - P08 indents every line of each XML context body.
 - P08 `-b/--backend` and `-m/--model` read `RAG_RERANK_BACKEND` / `RAG_RERANK_MODEL` (documented in `.env.example`), symmetric with P05's dense flags.
 - D-C1: P09 extractive answer skips Markdown heading lines and list bullets without terminal punctuation.
+- D-E1: P05 on a real document (184 chunks) died with a 15.6 GiB `MemoryError` in SPLADE because the whole chunk list went into one encode call. The engine now encodes in slices of `RAG_EMBED_BATCH_SIZE` (default 16, `-e/--embed-batch-size`) for every dense and sparse backend and prints `embedding dense 32/184` per slice on stderr.
+- D-E3: on a real question P09 returned GROUNDED but its answer held none of the matrix evidence (the top-3 sentence cap and zero lexical overlap crowded out display math and table rows), and P10 reported faithfulness 1.0 for it. P09 now keeps fenced code, `\[ .. \]` / `$$ .. $$` display math and Markdown table blocks of the top-ranked context verbatim, each with its citation. P10 faithfulness is the fraction of answer claims (sentences and blocks) found verbatim in the retrieved contexts, no longer a token-overlap ratio plus a 0.25 bias.
 - D-B1: dense sentence-transformers loader uses `get_embedding_dimension` (the old name raises a FutureWarning on sentence-transformers 6.x).
+
+### Known limitations
+- D-E2: `parent_markdown` is stored once per chunk in the P04 artifact, so a real document inflates it (184 chunks, 1.2 MB). Deduplicating it is planned for Task 8.
 
 ### Removed
 - `rag-p04b` GraphRAG side stage (no consumer, not in the spec).

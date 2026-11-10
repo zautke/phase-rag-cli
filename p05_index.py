@@ -9,6 +9,7 @@ from qdrant_client import models
 from hybrid_engine import (
     DEFAULT_DENSE_BACKEND,
     DEFAULT_DENSE_MODEL,
+    DEFAULT_EMBED_BATCH_SIZE,
     DEFAULT_QDRANT_PATH,
     DEFAULT_SPARSE_MODEL,
     DENSE_BACKENDS,
@@ -43,7 +44,7 @@ def Usage() -> str:
         "Usage: rag-p05 [--in-file / -i PATH] [--out-file / -o PATH] "
         "[--collection / -c NAME] [--qdrant-url / -u URL] [--qdrant-path / -p PATH] "
         "[--dense-backend / -b NAME] [--dense-model / -m NAME] [--sparse-model / -s NAME] "
-        "[--recreate / -r | --append / -a] [--quiet / -q]\n"
+        "[--embed-batch-size / -e N] [--recreate / -r | --append / -a] [--quiet / -q]\n"
         "Computes dense and sparse embeddings with the named plugin backends and upserts to Qdrant."
     )
 
@@ -97,6 +98,16 @@ def main(
         str,
         typer.Option("--sparse-model", "-s", envvar="RAG_SPARSE_MODEL", help="Sparse (SPLADE) model"),
     ] = DEFAULT_SPARSE_MODEL,
+    embed_batch_size: Annotated[
+        int,
+        typer.Option(
+            "--embed-batch-size",
+            "-e",
+            envvar="RAG_EMBED_BATCH_SIZE",
+            min=1,
+            help="Texts per dense/sparse encode call (bounds peak RAM)",
+        ),
+    ] = DEFAULT_EMBED_BATCH_SIZE,
     recreate: Annotated[
         bool,
         typer.Option(
@@ -123,8 +134,10 @@ def main(
     ]
 
     # 2. Compute dense and sparse (lexical expansion) vectors with the named plugins
-    dense_vectors = embed_dense_batch(contextualized_texts, dense_backend, dense_model)
-    sparse_tuples = embed_sparse_batch(contextualized_texts, sparse_model)
+    dense_vectors = embed_dense_batch(
+        contextualized_texts, dense_backend, dense_model, batch_size=embed_batch_size
+    )
+    sparse_tuples = embed_sparse_batch(contextualized_texts, sparse_model, batch_size=embed_batch_size)
 
     # 3. Initialize Qdrant Hybrid Collection (vector size from the loaded dense model) & build PointStructs
     _, dense_dim = get_dense_embedder(dense_backend, dense_model)

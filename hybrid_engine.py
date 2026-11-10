@@ -25,6 +25,9 @@ DEFAULT_DENSE_BACKEND = "sentence_transformers"
 DEFAULT_DENSE_MODEL = "jinaai/jina-embeddings-v3"
 DEFAULT_SPARSE_MODEL = "prithivida/Splade_PP_en_v1"
 DEFAULT_QDRANT_PATH = "./qdrant_storage"  # mirrored in .env.example (QDRANT_PATH)
+# Texts per encode call, mirrored in .env.example (RAG_EMBED_BATCH_SIZE); SPLADE logits are
+# batch x tokens x 30522 floats, so one unbatched call over a real document exhausts RAM (D-E1).
+DEFAULT_EMBED_BATCH_SIZE = 16
 DENSE_VECTOR_NAME = "jina-dense"
 SPARSE_VECTOR_NAME = "splade-sparse"
 
@@ -110,12 +113,26 @@ def get_dense_embedder(backend: str, model_name: str) -> tuple[Callable[[list[st
     return resolve_backend(DENSE_BACKENDS, backend, "dense")(model_name)
 
 
+def _embed_in_batches(kind: str, texts: list[str], batch_size: int, embed: Callable[[list[str]], list]) -> list:
+    """Run `embed` over slices of at most `batch_size` texts (bounds peak RAM for every backend,
+    including third-party plugins). Emits one stderr line per slice when there is more than one."""
+    size = max(1, batch_size)
+    out: list = []
+    for start in range(0, len(texts), size):
+        out.extend(embed(texts[start : start + size]))
+        if len(texts) > size:
+            sys.stderr.write(f"embedding {kind} {len(out)}/{len(texts)}\n")
+            sys.stderr.flush()
+    return out
+
+
 def embed_dense_batch(
-    texts: list[str], backend: str, model_name: str, query: bool = False
+    texts: list[str], backend: str, model_name: str, query: bool = False, batch_size: int = DEFAULT_EMBED_BATCH_SIZE
 ) -> list[list[float]]:
     if not texts:
         return []
-    return get_dense_embedder(backend, model_name)[0](texts, query)
+    embed = get_dense_embedder(backend, model_name)[0]
+    return _embed_in_batches("dense", texts, batch_size, lambda chunk: embed(chunk, query))
 
 
 # --- SPARSE plugins: loader(model_name) -> embed(texts) -> [(indices, values)] -------------------
@@ -134,10 +151,12 @@ def get_sparse_embedder(model_name: str) -> Callable[[list[str]], list[tuple[lis
     return resolve_backend(SPARSE_BACKENDS, "fastembed", "sparse")(model_name)
 
 
-def embed_sparse_batch(texts: list[str], model_name: str) -> list[tuple[list[int], list[float]]]:
+def embed_sparse_batch(
+    texts: list[str], model_name: str, batch_size: int = DEFAULT_EMBED_BATCH_SIZE
+) -> list[tuple[list[int], list[float]]]:
     if not texts:
         return []
-    return get_sparse_embedder(model_name)(texts)
+    return _embed_in_batches("sparse", texts, batch_size, get_sparse_embedder(model_name))
 
 
 def get_qdrant_client(qdrant_url: str | None, qdrant_path: str) -> QdrantClient:
