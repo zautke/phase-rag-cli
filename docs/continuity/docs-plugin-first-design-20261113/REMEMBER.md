@@ -14,4 +14,6 @@
 
 ## Limits to preserve
 
+2026-11-14 correction: migrating a payload that omits vectors is not lossless merely because input remains elsewhere. Migrated bundles retain byte-identical legacy attachment and validate digest. Error reports default to type/frame/causal metadata, with raw exception text opt-in for all sinks. Plugin version is strict `api_major: 1`; plan and artifact versions have separate contracts.
+
 No current product, exporter, backend or deployment verification was performed. No independent final curator signoff; curator worker hit usage limit. Detailed limitations and chronology are in [delivery evidence](../../design/2026-11-13-plugin-first/06-delivery-evidence.md).

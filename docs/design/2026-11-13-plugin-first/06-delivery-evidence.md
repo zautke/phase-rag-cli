@@ -4,6 +4,8 @@ Date: 2026-11-13. Scope: documentation, source inspection and research only.
 
 ## Evidence chronology
 
+- 2026-11-14: Sol/low plan review returned REVISE for lossless migration versus removed vectors, metadata-default exception capture, and inconsistent plugin API version naming. User requested update/commit/push/PR. Corrected all three: exact-byte legacy attachment bundle, explicit exception-text opt-in, and strict `api_major` integer. Same reviewer re-read changes and returned APPROVE for R1-R3 at design level. No implementation tests or backend calls.
+
 - Native PowerShell Git inventory identified dirty main at `1b617bc`, feature worktree at `41811f9`, and development at `7aab409`. Created isolated documentation branch `docs/plugin-first-design-20261113` from development; unrelated changes preserved.
 - CodeMunch main index refreshed from 138 to 170 symbols; feature index created with 1,774 symbols, including generated JSON. Used verified source for resolvers, collection setup, chunk construction, phase emission and subprocess errors. Index warnings about oversized artifacts prevent exhaustive negative claims.
 - Initial DocMunch CLI attempt returned `equivalent_corpus_stale`, no index write. Recovered through installed local MCP server with explicit `branch_local` indexing, no embeddings or model downloads. Indexed 18 docs / 324 sections at SHA-certified feature HEAD; retrieved three relevant manual/blueprint sections with source hashes verified.

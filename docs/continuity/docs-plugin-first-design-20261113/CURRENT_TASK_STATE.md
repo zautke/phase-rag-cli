@@ -1,8 +1,10 @@
 # Current task state
 
-Updated 2026-11-13. Scope: docs/plugin-first-design-20261113.
+Updated 2026-11-14. Scope: docs/plugin-first-design-20261113.
 
-Documentation task completed; user requested continuity refresh. Product implementation awaits explicit approval of design.
+Documentation delivered; user requested review corrections, commit, push and PR update. Sol/low approved targeted R1-R3 corrections at design level. Product implementation still awaits explicit approval.
+
+- Review corrections: legacy migration preserves exact original bytes in content-addressed attachment; raw exception text is opt-in across all sinks; plugin contract uses strict integer `api_major` only. See architecture review-resolution section and observability capture policy.
 
 - Worktree: `C:/Users/me/dev/phase-rag-cli-wt-design`; branch `docs/plugin-first-design-20261113`, based on development `7aab409`.
 - Dossier commit: `33972cb`, pushed. [Draft PR #6](https://github.com/zautke/phase-rag-cli/pull/6) OPEN/DRAFT, verified this refresh; no merge.

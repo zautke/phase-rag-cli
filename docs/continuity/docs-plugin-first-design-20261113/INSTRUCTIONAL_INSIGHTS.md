@@ -1,5 +1,9 @@
 # Instructional insights
 
+## 2026-11-14
+
+Check cross-document promises, not only individual paragraphs: lossless migration needs an explicit home for removed fields; metadata-only capture must constrain exception formatters too; public protocol examples and descriptor tables must use identical field names and types. Close review findings with targeted re-review, and label design approval separately from implemented behavior.
+
 ## 2026-11-13
 
 1. Deliver documents when requested, with actual paths and readback. Chat summaries are not a report set. Explain mode limitations early; after writes become permitted, finish artifacts without another approval loop.

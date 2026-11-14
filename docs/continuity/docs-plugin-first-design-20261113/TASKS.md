@@ -13,6 +13,8 @@
 
 ## Product gates — not executed
 
+Review update 2026-11-14: R1-R3 corrected and approved by Sol/low targeted re-review. Documentation commit/push and canonical KB synchronization are recorded in PR #6 and run ledger; no product gate changed status.
+
 - [ ] Obtain implementation approval for dossier.
 - [ ] Reconcile latest feature branch/repairs and current development baseline.
 - [ ] Implement contracts, installed-plugin proof, composition, diagnostics and migrations.

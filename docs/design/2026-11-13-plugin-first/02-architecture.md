@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 class PluginStep(Protocol):
     id: ClassVar[str]                 # globally unique, stable package/name
-    api_version: ClassVar[str]        # supported plugin contract version
+    api_major: ClassVar[int]          # strict integer 1; plugin contract compatibility
     input_schema: ClassVar[type[BaseModel]]
     output_schema: ClassVar[type[BaseModel]]
     config_schema: ClassVar[type[BaseModel]]
@@ -122,6 +122,16 @@ Published payloads carry explicit schema name and schema version in a common env
 Version the plugin API independently from artifact schemas. Adding or changing a capability requires an explicit compatibility policy; incompatible plugin API changes fail during preflight. Maintain fixtures for each supported schema version and test old CLI artifacts through migrations and current consumers. Remove a migration only under an announced support policy, after checking retained artifacts and downstream users.
 
 ## Acceptance boundaries
+
+### Review resolution — 2026-11-14
+
+Plugin descriptors and PluginStep use only `api_major: int`, currently `1`. Reject string `"1"`, booleans, unsupported integers and the obsolete descriptor field `api_version`; no alias or coercion. Pipeline configuration independently retains `api_version: "1"` (string), while artifact envelopes use `schema_version: 2` (integer). Tests cover valid external descriptor and each invalid spelling/type.
+
+Legacy-to-v2 migration is lossless as a **bundle**, not as the new payload alone. Every migrated envelope adds optional `legacy_attachment` (absent on newly generated v2 artifacts), containing `format: "phase-rag-legacy/1"`, `path`, `sha256`, and `size_bytes`. The migration command copies exact original bytes to a sibling content-addressed file named `<sha256>.legacy.json`, then references it by relative filename. This retains all original fields, including dense/sparse vectors omitted from v2 indexed output. The attachment is required to retain the migration bundle's historical completeness, but is not read as live vector-store state and does not establish embedding-space compatibility.
+
+Transformation functions remain pure and return both v2 data and attachment metadata; the command owns persistence. Validate input first, atomically commit the sidecar, then atomically commit v2 output. Existing same-hash sidecars are reused only after digest/size verification; conflicting contents fail without overwrite. Failure before v2 commit may leave an unreferenced sidecar, which is reported and never automatically deleted. Copy/export of a migrated bundle must include its attachment; bundle validation rejects a missing, altered or path-traversing attachment. Never modify original input. Legacy indexes without full embedding identity still require source rebuild for active retrieval; preserving vectors is archival retention, not permission to query an unknown space.
+
+Required migration fixture: legacy P05 with nonempty dense/sparse vectors and additional supported legacy fields produces valid v2 plus byte-identical attachment; restore original bytes from attachment and compare digest. Negative fixtures cover missing/corrupt sidecar, conflicting existing file, output commit failure, unsupported legacy schema and unknown embedding identity. This resolves Sol review R1 without dropping migration coverage; field unification resolves R3.
 
 ### Package layout and migration command
 

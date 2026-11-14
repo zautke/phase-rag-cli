@@ -1,5 +1,9 @@
 # Session log
 
+## 2026-11-14 — Sol review corrections
+
+User requested update, commit, push and PR. Verified three findings, added lossless migration bundle semantics, metadata-default exception policy and canonical plugin version field. Sol/low targeted re-review approved R1-R3 at design level. Updated scoped continuity and canonical KB copies; existing PR #6 remains draft. No product implementation or runtime tests.
+
 ## 2026-11-13 — continuity refresh after durable delivery
 
 User requested `use continuity`. Resolved branch scope to `docs-plugin-first-design-20261113`; no scoped or project-root copies of the six files existed. Created new canonical scoped set. Existing root-checkout continuity is unrelated dirty work and remains untouched. PR #6 verified open and draft.

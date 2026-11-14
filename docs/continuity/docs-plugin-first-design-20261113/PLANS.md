@@ -6,6 +6,8 @@
 
 ## Accepted design direction
 
+2026-11-14 review refinements: lossless migration is a bundle (v2 envelope plus integrity-checked exact-byte legacy attachment); raw exception messages/notes/source text are opt-in, without altering propagated exceptions; plugin `api_major` integer is distinct from plan `api_version` string and artifact `schema_version` integer. Sol/low approved these corrections, not product implementation.
+
 - Multiple plugins within phases via ordered chains and branches with explicit reducers.
 - Reusable capabilities across phases; externally installed plugin packages; one entry-point group.
 - Versioned schema migration allowed; numbered command names retained. Explicit migration, not silent reinterpretation.
